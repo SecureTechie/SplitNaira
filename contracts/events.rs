@@ -6,7 +6,6 @@ use soroban_sdk::{Address, Env, Symbol};
 pub struct SplitEvents;
 
 impl SplitEvents {
-
     /// Emitted when a new royalty split project is created.
     ///
     /// Topics:  ["project_created", project_id]
@@ -43,11 +42,14 @@ impl SplitEvents {
     /// Emitted once when a full distribution round completes.
     ///
     /// Topics:  ["distribution_complete", project_id]
-    /// Data:    total amount distributed in this round (stroops)
-    pub fn distribution_complete(env: &Env, project_id: &Symbol, total: i128) {
+    /// Data:    (round_number, total amount distributed in this round in stroops)
+    pub fn distribution_complete(env: &Env, project_id: &Symbol, round: u32, total: i128) {
         env.events().publish(
-            (Symbol::new(env, "distribution_complete"), project_id.clone()),
-            total,
+            (
+                Symbol::new(env, "distribution_complete"),
+                project_id.clone(),
+            ),
+            (round, total),
         );
     }
 }

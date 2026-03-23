@@ -1,9 +1,6 @@
 #![no_std]
 
-use soroban_sdk::{
-    contract, contractimpl, contracttype,
-    token, Address, Env, String, Symbol, Vec,
-};
+use soroban_sdk::{contract, contractimpl, contracttype, token, Address, Env, String, Symbol, Vec};
 
 mod errors;
 mod events;
@@ -50,6 +47,8 @@ pub struct SplitProject {
     pub locked: bool,
     /// Total funds distributed so far (in token stroops)
     pub total_distributed: i128,
+    /// Number of successful distribution rounds completed
+    pub distribution_round: u32,
 }
 
 // ============================================================
@@ -60,6 +59,8 @@ pub struct SplitProject {
 pub enum DataKey {
     /// Stores SplitProject by project_id
     Project(Symbol),
+    /// Tracks available project-specific funds that can be distributed
+    ProjectBalance(Symbol),
     /// Tracks how much each address has claimed per project
     Claimed(Symbol, Address),
     /// Total project count (for enumeration)
@@ -75,7 +76,6 @@ pub struct SplitNairaContract;
 
 #[contractimpl]
 impl SplitNairaContract {
-
     // ----------------------------------------------------------
     // CREATE PROJECT
     // ----------------------------------------------------------
@@ -107,27 +107,15 @@ impl SplitNairaContract {
         owner.require_auth();
 
         // Guard: project must not already exist
-        if env.storage().persistent().has(&DataKey::Project(project_id.clone())) {
+        if env
+            .storage()
+            .persistent()
+            .has(&DataKey::Project(project_id.clone()))
+        {
             return Err(SplitError::ProjectExists);
         }
 
-        // Guard: minimum 2 collaborators required
-        if collaborators.len() < 2 {
-            return Err(SplitError::TooFewCollaborators);
-        }
-
-        // Guard: basis points must sum exactly to 10000 (= 100.00%)
-        let total_bp: u32 = collaborators.iter().map(|c| c.basis_points).sum();
-        if total_bp != 10_000 {
-            return Err(SplitError::InvalidSplit);
-        }
-
-        // Guard: no collaborator can have 0% share
-        for collab in collaborators.iter() {
-            if collab.basis_points == 0 {
-                return Err(SplitError::ZeroShare);
-            }
-        }
+        Self::validate_collaborators(&collaborators)?;
 
         let project = SplitProject {
             project_id: project_id.clone(),
@@ -138,18 +126,61 @@ impl SplitNairaContract {
             collaborators,
             locked: false,
             total_distributed: 0,
+            distribution_round: 0,
         };
 
-        env.storage().persistent().set(&DataKey::Project(project_id.clone()), &project);
+        env.storage()
+            .persistent()
+            .set(&DataKey::Project(project_id.clone()), &project);
+        env.storage()
+            .persistent()
+            .set(&DataKey::ProjectBalance(project_id.clone()), &0i128);
 
         // Increment global project count
-        let count: u32 = env.storage().persistent()
+        let count: u32 = env
+            .storage()
+            .persistent()
             .get(&DataKey::ProjectCount)
             .unwrap_or(0);
-        env.storage().persistent().set(&DataKey::ProjectCount, &(count + 1));
+        env.storage()
+            .persistent()
+            .set(&DataKey::ProjectCount, &(count + 1));
 
         // Emit creation event
         SplitEvents::project_created(&env, &project_id, &owner);
+
+        Ok(())
+    }
+
+    // ----------------------------------------------------------
+    // UPDATE COLLABORATORS
+    // ----------------------------------------------------------
+
+    /// Updates collaborator addresses and basis point splits for an existing project.
+    /// Only the project owner can update, and only while the project is unlocked.
+    pub fn update_collaborators(
+        env: Env,
+        project_id: Symbol,
+        owner: Address,
+        collaborators: Vec<Collaborator>,
+    ) -> Result<(), SplitError> {
+        let mut project = Self::get_project_or_err(&env, &project_id)?;
+
+        if project.owner != owner {
+            return Err(SplitError::Unauthorized);
+        }
+        owner.require_auth();
+
+        if project.locked {
+            return Err(SplitError::ProjectLocked);
+        }
+
+        Self::validate_collaborators(&collaborators)?;
+
+        project.collaborators = collaborators;
+        env.storage()
+            .persistent()
+            .set(&DataKey::Project(project_id), &project);
 
         Ok(())
     }
@@ -167,11 +198,7 @@ impl SplitNairaContract {
     /// * `SplitError::NotFound`       - if project doesn't exist
     /// * `SplitError::Unauthorized`   - if caller is not the owner
     /// * `SplitError::AlreadyLocked`  - if project is already locked
-    pub fn lock_project(
-        env: Env,
-        project_id: Symbol,
-        owner: Address,
-    ) -> Result<(), SplitError> {
+    pub fn lock_project(env: Env, project_id: Symbol, owner: Address) -> Result<(), SplitError> {
         let mut project = Self::get_project_or_err(&env, &project_id)?;
 
         if project.owner != owner {
@@ -184,9 +211,48 @@ impl SplitNairaContract {
         }
 
         project.locked = true;
-        env.storage().persistent().set(&DataKey::Project(project_id.clone()), &project);
+        env.storage()
+            .persistent()
+            .set(&DataKey::Project(project_id.clone()), &project);
 
         SplitEvents::project_locked(&env, &project_id);
+
+        Ok(())
+    }
+
+    // ----------------------------------------------------------
+    // DEPOSIT
+    // ----------------------------------------------------------
+
+    /// Deposits project funds into this contract and credits the target project's
+    /// internal distributable balance.
+    pub fn deposit(
+        env: Env,
+        project_id: Symbol,
+        from: Address,
+        amount: i128,
+    ) -> Result<(), SplitError> {
+        if amount <= 0 {
+            return Err(SplitError::InvalidAmount);
+        }
+
+        let project = Self::get_project_or_err(&env, &project_id)?;
+        from.require_auth();
+
+        let token_client = token::Client::new(&env, &project.token);
+        let contract_address = env.current_contract_address();
+        token_client.transfer(&from, &contract_address, &amount);
+
+        let prev_balance: i128 = env
+            .storage()
+            .persistent()
+            .get(&DataKey::ProjectBalance(project_id.clone()))
+            .unwrap_or(0);
+
+        env.storage().persistent().set(
+            &DataKey::ProjectBalance(project_id),
+            &(prev_balance + amount),
+        );
 
         Ok(())
     }
@@ -195,7 +261,7 @@ impl SplitNairaContract {
     // DISTRIBUTE
     // ----------------------------------------------------------
 
-    /// Distributes the contract's current token balance to all
+    /// Distributes the target project's internal balance to all
     /// collaborators according to their basis point shares.
     ///
     /// Anyone can call distribute — the math is trustless.
@@ -207,20 +273,21 @@ impl SplitNairaContract {
     /// # Errors
     /// * `SplitError::NotFound`   - if project doesn't exist
     /// * `SplitError::NoBalance`  - if contract has zero balance
-    pub fn distribute(
-        env: Env,
-        project_id: Symbol,
-    ) -> Result<(), SplitError> {
+    pub fn distribute(env: Env, project_id: Symbol) -> Result<(), SplitError> {
         let mut project = Self::get_project_or_err(&env, &project_id)?;
 
-        // Get the contract's current token balance
-        let token_client = token::Client::new(&env, &project.token);
-        let contract_address = env.current_contract_address();
-        let balance = token_client.balance(&contract_address);
-
+        // Read project-scoped distributable balance.
+        let balance: i128 = env
+            .storage()
+            .persistent()
+            .get(&DataKey::ProjectBalance(project_id.clone()))
+            .unwrap_or(0);
         if balance <= 0 {
             return Err(SplitError::NoBalance);
         }
+
+        let token_client = token::Client::new(&env, &project.token);
+        let contract_address = env.current_contract_address();
 
         let mut total_sent: i128 = 0;
         let last_index = project.collaborators.len() - 1;
@@ -238,8 +305,13 @@ impl SplitNairaContract {
                 token_client.transfer(&contract_address, &collab.address, &amount);
 
                 // Update claimed ledger
-                let prev_claimed: i128 = env.storage().persistent()
-                    .get(&DataKey::Claimed(project_id.clone(), collab.address.clone()))
+                let prev_claimed: i128 = env
+                    .storage()
+                    .persistent()
+                    .get(&DataKey::Claimed(
+                        project_id.clone(),
+                        collab.address.clone(),
+                    ))
                     .unwrap_or(0);
                 env.storage().persistent().set(
                     &DataKey::Claimed(project_id.clone(), collab.address.clone()),
@@ -252,10 +324,24 @@ impl SplitNairaContract {
             }
         }
 
-        project.total_distributed += total_sent;
-        env.storage().persistent().set(&DataKey::Project(project_id.clone()), &project);
+        let remaining_balance = balance - total_sent;
+        env.storage().persistent().set(
+            &DataKey::ProjectBalance(project_id.clone()),
+            &remaining_balance,
+        );
 
-        SplitEvents::distribution_complete(&env, &project_id, total_sent);
+        project.total_distributed += total_sent;
+        project.distribution_round += 1;
+        env.storage()
+            .persistent()
+            .set(&DataKey::Project(project_id.clone()), &project);
+
+        SplitEvents::distribution_complete(
+            &env,
+            &project_id,
+            project.distribution_round,
+            total_sent,
+        );
 
         Ok(())
     }
@@ -266,28 +352,35 @@ impl SplitNairaContract {
 
     /// Returns the full SplitProject struct for a given project ID.
     pub fn get_project(env: Env, project_id: Symbol) -> Option<SplitProject> {
-        env.storage().persistent().get(&DataKey::Project(project_id))
+        env.storage()
+            .persistent()
+            .get(&DataKey::Project(project_id))
     }
 
     /// Returns how much a specific address has been paid for a project.
     pub fn get_claimed(env: Env, project_id: Symbol, address: Address) -> i128 {
-        env.storage().persistent()
+        env.storage()
+            .persistent()
             .get(&DataKey::Claimed(project_id, address))
             .unwrap_or(0)
     }
 
     /// Returns the total number of projects created on this contract.
     pub fn get_project_count(env: Env) -> u32 {
-        env.storage().persistent()
+        env.storage()
+            .persistent()
             .get(&DataKey::ProjectCount)
             .unwrap_or(0)
     }
 
-    /// Returns the current token balance held by this contract for a project.
+    /// Returns the project-scoped distributable balance.
     pub fn get_balance(env: Env, project_id: Symbol) -> Result<i128, SplitError> {
-        let project = Self::get_project_or_err(&env, &project_id)?;
-        let token_client = token::Client::new(&env, &project.token);
-        Ok(token_client.balance(&env.current_contract_address()))
+        Self::get_project_or_err(&env, &project_id)?;
+        Ok(env
+            .storage()
+            .persistent()
+            .get(&DataKey::ProjectBalance(project_id))
+            .unwrap_or(0))
     }
 
     // ----------------------------------------------------------
@@ -299,5 +392,31 @@ impl SplitNairaContract {
             .persistent()
             .get(&DataKey::Project(project_id.clone()))
             .ok_or(SplitError::NotFound)
+    }
+
+    fn validate_collaborators(collaborators: &Vec<Collaborator>) -> Result<(), SplitError> {
+        if collaborators.len() < 2 {
+            return Err(SplitError::TooFewCollaborators);
+        }
+
+        let mut total_bp: u32 = 0;
+        for (i, collab) in collaborators.iter().enumerate() {
+            if collab.basis_points == 0 {
+                return Err(SplitError::ZeroShare);
+            }
+            total_bp += collab.basis_points;
+
+            for (j, other) in collaborators.iter().enumerate() {
+                if i != j && collab.address == other.address {
+                    return Err(SplitError::DuplicateCollaborator);
+                }
+            }
+        }
+
+        if total_bp != 10_000 {
+            return Err(SplitError::InvalidSplit);
+        }
+
+        Ok(())
     }
 }
