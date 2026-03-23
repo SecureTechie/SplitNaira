@@ -23,7 +23,7 @@ pub enum SplitError {
     /// A collaborator was assigned 0 basis points
     ZeroShare = 6,
 
-    /// Contract holds no token balance to distribute
+    /// Target project holds no balance to distribute
     NoBalance = 7,
 
     /// Project is already locked and cannot be modified
@@ -31,4 +31,10 @@ pub enum SplitError {
 
     /// Project is locked; splits cannot be updated
     ProjectLocked = 9,
+
+    /// Duplicate collaborator address detected in split definition
+    DuplicateCollaborator = 10,
+
+    /// Deposit or transfer amount is invalid
+    InvalidAmount = 11,
 }
