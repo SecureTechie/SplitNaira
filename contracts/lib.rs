@@ -10,6 +10,11 @@ mod tests;
 use errors::SplitError;
 use events::SplitEvents;
 
+// Keep active projects alive by extending persistent TTL whenever they are
+// created, mutated, distributed, or read.
+const PROJECT_TTL_THRESHOLD_LEDGERS: u32 = 50_000;
+const PROJECT_TTL_BUMP_LEDGERS: u32 = 100_000;
+
 // ============================================================
 //  DATA TYPES
 // ============================================================
@@ -206,6 +211,7 @@ impl SplitNairaContract {
         env.storage()
             .persistent()
             .set(&DataKey::ProjectBalance(project_id.clone()), &0i128);
+        Self::bump_project_ttl(&env, &project_id);
 
         // Increment global project count
         let count: u32 = env
@@ -252,6 +258,7 @@ impl SplitNairaContract {
         env.storage()
             .persistent()
             .set(&DataKey::Project(project_id), &project);
+        Self::bump_project_ttl(&env, &project.project_id);
 
         Ok(())
     }
@@ -406,6 +413,7 @@ impl SplitNairaContract {
         env.storage()
             .persistent()
             .set(&DataKey::Project(project_id.clone()), &project);
+        Self::bump_project_ttl(&env, &project_id);
 
         SplitEvents::distribution_complete(
             &env,
@@ -423,9 +431,14 @@ impl SplitNairaContract {
 
     /// Returns the full SplitProject struct for a given project ID.
     pub fn get_project(env: Env, project_id: Symbol) -> Option<SplitProject> {
-        env.storage()
+        let project = env
+            .storage()
             .persistent()
-            .get(&DataKey::Project(project_id))
+            .get(&DataKey::Project(project_id.clone()));
+        if project.is_some() {
+            Self::bump_project_ttl(&env, &project_id);
+        }
+        project
     }
 
     /// Returns how much a specific address has been paid for a project.
@@ -479,10 +492,30 @@ impl SplitNairaContract {
     // ----------------------------------------------------------
 
     fn get_project_or_err(env: &Env, project_id: &Symbol) -> Result<SplitProject, SplitError> {
-        env.storage()
+        let project = env
+            .storage()
             .persistent()
             .get(&DataKey::Project(project_id.clone()))
-            .ok_or(SplitError::NotFound)
+            .ok_or(SplitError::NotFound)?;
+        Self::bump_project_ttl(env, project_id);
+        Ok(project)
+    }
+
+    /// Extends TTL for the core project entries so active projects don't expire.
+    /// This is called on hot paths (read/write/distribute/create).
+    fn bump_project_ttl(env: &Env, project_id: &Symbol) {
+        let project_key = DataKey::Project(project_id.clone());
+        let balance_key = DataKey::ProjectBalance(project_id.clone());
+        env.storage().persistent().extend_ttl(
+            &project_key,
+            PROJECT_TTL_THRESHOLD_LEDGERS,
+            PROJECT_TTL_BUMP_LEDGERS,
+        );
+        env.storage().persistent().extend_ttl(
+            &balance_key,
+            PROJECT_TTL_THRESHOLD_LEDGERS,
+            PROJECT_TTL_BUMP_LEDGERS,
+        );
     }
 
     fn require_contract_admin(env: &Env, admin: &Address) -> Result<(), SplitError> {
