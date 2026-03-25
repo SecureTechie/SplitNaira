@@ -96,7 +96,7 @@ impl SplitNairaContract {
     /// If admin is not set yet, `admin` must authorize this call.
     /// If admin is already set, the current admin must authorize this call.
     pub fn set_admin(env: Env, admin: Address) -> Result<(), SplitError> {
-        if let Some(current_admin) = env.storage().persistent().get(&DataKey::Admin) {
+        if let Some(current_admin) = env.storage().persistent().get::<DataKey, Address>(&DataKey::Admin) {
             current_admin.require_auth();
         } else {
             admin.require_auth();
@@ -118,7 +118,7 @@ impl SplitNairaContract {
             let count: u32 = env
                 .storage()
                 .persistent()
-                .get(&DataKey::AllowedTokenCount)
+                .get::<DataKey, u32>(&DataKey::AllowedTokenCount)
                 .unwrap_or(0);
             env.storage()
                 .persistent()
@@ -140,7 +140,7 @@ impl SplitNairaContract {
             let count: u32 = env
                 .storage()
                 .persistent()
-                .get(&DataKey::AllowedTokenCount)
+                .get::<DataKey, u32>(&DataKey::AllowedTokenCount)
                 .unwrap_or(0);
             env.storage()
                 .persistent()
@@ -217,7 +217,7 @@ impl SplitNairaContract {
         let count: u32 = env
             .storage()
             .persistent()
-            .get(&DataKey::ProjectCount)
+            .get::<DataKey, u32>(&DataKey::ProjectCount)
             .unwrap_or(0);
         env.storage()
             .persistent()
@@ -324,7 +324,7 @@ impl SplitNairaContract {
         let prev_balance: i128 = env
             .storage()
             .persistent()
-            .get(&DataKey::ProjectBalance(project_id.clone()))
+            .get::<DataKey, i128>(&DataKey::ProjectBalance(project_id.clone()))
             .unwrap_or(0);
 
         env.storage().persistent().set(
@@ -358,7 +358,7 @@ impl SplitNairaContract {
         let balance: i128 = env
             .storage()
             .persistent()
-            .get(&DataKey::ProjectBalance(project_id.clone()))
+            .get::<DataKey, i128>(&DataKey::ProjectBalance(project_id.clone()))
             .unwrap_or(0);
         if balance <= 0 {
             return Err(SplitError::NoBalance);
@@ -386,7 +386,7 @@ impl SplitNairaContract {
                 let prev_claimed: i128 = env
                     .storage()
                     .persistent()
-                    .get(&DataKey::Claimed(
+                    .get::<DataKey, i128>(&DataKey::Claimed(
                         project_id.clone(),
                         collab.address.clone(),
                     ))
@@ -445,7 +445,7 @@ impl SplitNairaContract {
     pub fn get_claimed(env: Env, project_id: Symbol, address: Address) -> i128 {
         env.storage()
             .persistent()
-            .get(&DataKey::Claimed(project_id, address))
+            .get::<DataKey, i128>(&DataKey::Claimed(project_id, address))
             .unwrap_or(0)
     }
 
@@ -453,7 +453,7 @@ impl SplitNairaContract {
     pub fn get_project_count(env: Env) -> u32 {
         env.storage()
             .persistent()
-            .get(&DataKey::ProjectCount)
+            .get::<DataKey, u32>(&DataKey::ProjectCount)
             .unwrap_or(0)
     }
 
@@ -463,7 +463,7 @@ impl SplitNairaContract {
         Ok(env
             .storage()
             .persistent()
-            .get(&DataKey::ProjectBalance(project_id))
+            .get::<DataKey, i128>(&DataKey::ProjectBalance(project_id))
             .unwrap_or(0))
     }
 
@@ -478,13 +478,13 @@ impl SplitNairaContract {
     pub fn get_allowed_token_count(env: Env) -> u32 {
         env.storage()
             .persistent()
-            .get(&DataKey::AllowedTokenCount)
+            .get::<DataKey, u32>(&DataKey::AllowedTokenCount)
             .unwrap_or(0)
     }
 
     /// Returns the configured contract admin, if set.
     pub fn get_admin(env: Env) -> Option<Address> {
-        env.storage().persistent().get(&DataKey::Admin)
+        env.storage().persistent().get::<DataKey, Address>(&DataKey::Admin)
     }
 
     // ----------------------------------------------------------
@@ -495,7 +495,7 @@ impl SplitNairaContract {
         let project = env
             .storage()
             .persistent()
-            .get(&DataKey::Project(project_id.clone()))
+            .get::<DataKey, SplitProject>(&DataKey::Project(project_id.clone()))
             .ok_or(SplitError::NotFound)?;
         Self::bump_project_ttl(env, project_id);
         Ok(project)
@@ -522,7 +522,7 @@ impl SplitNairaContract {
         let current_admin: Address = env
             .storage()
             .persistent()
-            .get(&DataKey::Admin)
+            .get::<DataKey, Address>(&DataKey::Admin)
             .ok_or(SplitError::AdminNotSet)?;
 
         if current_admin != admin.clone() {
@@ -537,7 +537,7 @@ impl SplitNairaContract {
         let allowed_token_count: u32 = env
             .storage()
             .persistent()
-            .get(&DataKey::AllowedTokenCount)
+            .get::<DataKey, u32>(&DataKey::AllowedTokenCount)
             .unwrap_or(0);
 
         if allowed_token_count == 0 {

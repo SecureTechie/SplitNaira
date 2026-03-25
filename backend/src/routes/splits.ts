@@ -1,4 +1,4 @@
-import { Router } from "express";
+import { Request, Response, NextFunction, Router } from "express";
 import { z } from "zod";
 import {
   Account,
@@ -213,7 +213,8 @@ async function fetchProjectById(projectId: string) {
   const server = new rpc.Server(config.sorobanRpcUrl, { allowHttp: true });
   const contract = new Contract(config.contractId);
 
-  const simulationTx = new TransactionBuilder(new Account("GBRPYHIL2C4YVYC3Q4W4A6FTZVJ35UEDPKBQ6F4NNDM44YXV2RDJX2KE", "0"), {
+  // 1. Fetch project details
+  const projectTx = new TransactionBuilder(new Account("GBRPYHIL2C4YVYC3Q4W4A6FTZVJ35UEDPKBQ6F4NNDM44YXV2RDJX2KE", "0"), {
     fee: BASE_FEE,
     networkPassphrase: config.networkPassphrase
   })
@@ -221,15 +222,27 @@ async function fetchProjectById(projectId: string) {
     .setTimeout(30)
     .build();
 
-  const simulation = await server.simulateTransaction(simulationTx);
-  if (rpc.Api.isSimulationError(simulation)) {
-    throw new Error(simulation.error);
+  const projectSim = await server.simulateTransaction(projectTx);
+  if (rpc.Api.isSimulationError(projectSim)) {
+    return null;
   }
 
-  const projectRaw = simulation.result?.retval ? scValToNative(simulation.result.retval) : null;
+  const projectRaw = projectSim.result?.retval ? scValToNative(projectSim.result.retval) : null;
   if (!projectRaw) {
     return null;
   }
+
+  // 2. Fetch project balance
+  const balanceTx = new TransactionBuilder(new Account("GBRPYHIL2C4YVYC3Q4W4A6FTZVJ35UEDPKBQ6F4NNDM44YXV2RDJX2KE", "0"), {
+    fee: BASE_FEE,
+    networkPassphrase: config.networkPassphrase
+  })
+    .addOperation(contract.call("get_balance", nativeToScVal(projectId, { type: "symbol" })))
+    .setTimeout(30)
+    .build();
+
+  const balanceSim = await server.simulateTransaction(balanceTx);
+  const balance = balanceSim.result?.retval ? scValToNative(balanceSim.result.retval) : 0;
 
   const project = projectRaw as {
     project_id: string;
@@ -256,11 +269,12 @@ async function fetchProjectById(projectId: string) {
     })),
     locked: project.locked,
     totalDistributed: String(project.total_distributed),
-    distributionRound: project.distribution_round
+    distributionRound: project.distribution_round,
+    balance: String(balance)
   };
 }
 
-splitsRouter.get("/:projectId", async (req, res, next) => {
+splitsRouter.get("/:projectId", async (req: Request, res: Response, next: NextFunction) => {
   try {
     const requestId = res.locals.requestId;
     const projectId = req.params.projectId?.trim();
@@ -353,6 +367,69 @@ splitsRouter.post("/", async (req, res, next) => {
       }
       throw error;
     }
+  } catch (error) {
+    return next(error);
+  }
+});
+
+const distributeSchema = z.object({
+  sourceAddress: z.string().min(1, "sourceAddress is required")
+});
+
+splitsRouter.post("/:projectId/distribute", async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const projectId = req.params.projectId?.trim();
+    if (!projectId) {
+      return res.status(400).json({
+        error: "validation_error",
+        message: "projectId is required"
+      });
+    }
+
+    const parsed = distributeSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({
+        error: "validation_error",
+        message: "Invalid request payload.",
+        details: parsed.error.flatten()
+      });
+    }
+
+    const config = loadStellarConfig();
+    const server = new rpc.Server(config.sorobanRpcUrl, { allowHttp: true });
+
+    let sourceAccount;
+    try {
+      sourceAccount = await server.getAccount(parsed.data.sourceAddress);
+    } catch {
+      return res.status(400).json({
+        error: "validation_error",
+        message: "source account not found on selected network"
+      });
+    }
+
+    const contract = new Contract(config.contractId);
+    const tx = new TransactionBuilder(sourceAccount, {
+      fee: BASE_FEE,
+      networkPassphrase: config.networkPassphrase
+    })
+      .addOperation(
+        contract.call("distribute", nativeToScVal(projectId, { type: "symbol" }))
+      )
+      .setTimeout(300)
+      .build();
+
+    const preparedTx = await server.prepareTransaction(tx);
+
+    return res.status(200).json({
+      xdr: preparedTx.toXDR(),
+      metadata: {
+        contractId: config.contractId,
+        networkPassphrase: config.networkPassphrase,
+        sourceAccount: parsed.data.sourceAddress,
+        operation: "distribute"
+      }
+    });
   } catch (error) {
     return next(error);
   }

@@ -48,6 +48,23 @@ export async function buildCreateSplitXdr(payload: CreateSplitPayload): Promise<
   return body as BuildSplitResponse;
 }
 
+// SplitProject is imported from ./stellar
+
+export async function buildDistributeXdr(projectId: string, sourceAddress: string): Promise<BuildSplitResponse> {
+  const response = await fetch(`${API_BASE_URL}/splits/${encodeURIComponent(projectId)}/distribute`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ sourceAddress })
+  });
+
+  const body = (await response.json().catch(() => null)) as unknown;
+  if (!response.ok) {
+    throw new Error(toErrorMessage(response.status, body, "Failed to build distribution transaction"));
+  }
+
+  return body as BuildSplitResponse;
+}
+
 export async function getSplit(projectId: string): Promise<SplitProject> {
   const response = await fetch(`${API_BASE_URL}/splits/${encodeURIComponent(projectId)}`);
   const body = (await response.json().catch(() => null)) as unknown;

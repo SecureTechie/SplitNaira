@@ -1,4 +1,4 @@
-﻿export type StellarNetwork = "testnet" | "mainnet";
+export type StellarNetwork = "testnet" | "mainnet";
 
 export interface SplitProject {
   projectId: string;
@@ -13,6 +13,8 @@ export interface SplitProject {
   }>;
   locked: boolean;
   totalDistributed: string;
+  distributionRound: number;
+  balance: string;
 }
 
 export function getHorizonUrl(network: StellarNetwork) {
