@@ -1,14 +1,12 @@
 import { Request, Response, NextFunction, Router } from "express";
 import { z } from "zod";
 import {
-  Account,
   Address,
   BASE_FEE,
   Contract,
   TransactionBuilder,
   nativeToScVal,
   rpc,
-  scValToNative,
   xdr
 } from "@stellar/stellar-sdk";
 
@@ -37,6 +35,48 @@ const createSplitSchema = z
     title: z.string().min(1, "title is required").max(128),
     projectType: z.string().min(1, "projectType is required").max(32),
     token: z.string().min(1, "token is required"),
+    collaborators: z.array(collaboratorSchema).min(2, "at least 2 collaborators are required")
+  })
+  .superRefine((payload, ctx) => {
+    const totalBasisPoints = payload.collaborators.reduce(
+      (sum, collaborator) => sum + collaborator.basisPoints,
+      0
+    );
+    if (totalBasisPoints !== 10_000) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["collaborators"],
+        message: "collaborators basisPoints must sum to exactly 10000"
+      });
+    }
+
+    const addresses = new Set<string>();
+    for (const collaborator of payload.collaborators) {
+      if (addresses.has(collaborator.address)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["collaborators"],
+          message: "duplicate collaborator address found"
+        });
+        break;
+      }
+      addresses.add(collaborator.address);
+    }
+  });
+
+const projectIdParamSchema = z
+  .string()
+  .min(1, "projectId is required")
+  .max(32, "projectId must be at most 32 characters")
+  .regex(/^[a-zA-Z0-9_]+$/, "projectId must be alphanumeric/underscore");
+
+const lockProjectSchema = z.object({
+  owner: z.string().min(1, "owner is required")
+});
+
+const updateCollaboratorsSchema = z
+  .object({
+    owner: z.string().min(1, "owner is required"),
     collaborators: z.array(collaboratorSchema).min(2, "at least 2 collaborators are required")
   })
   .superRefine((payload, ctx) => {
@@ -149,82 +189,52 @@ async function buildCreateProjectUnsignedXdr(
   };
 }
 
-async function fetchProjectById(projectId: string) {
-  const config = loadStellarConfig();
-  const server = new rpc.Server(config.sorobanRpcUrl, { allowHttp: true });
-  const contract = new Contract(config.contractId);
+const listProjectsSchema = z.object({
+  start: z.coerce.number().int().min(0).default(0),
+  limit: z.coerce.number().int().min(1).max(100).default(10)
+});
 
-  const dummyAccount = new Account("GBRPYHIL2C4YVYC3Q4W4A6FTZVJ35UEDPKBQ6F4NNDM44YXV2RDJX2KE", "0");
+splitsRouter.get("/", async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const requestId = res.locals.requestId;
 
-  // 1. Fetch project details
-  const projectTx = new TransactionBuilder(dummyAccount, {
-    fee: BASE_FEE,
-    networkPassphrase: config.networkPassphrase
-  })
-    .addOperation(contract.call("get_project", nativeToScVal(projectId, { type: "symbol" })))
-    .setTimeout(30)
-    .build();
+    const parsed = listProjectsSchema.safeParse(req.query);
+    if (!parsed.success) {
+      return res.status(400).json({
+        error: "validation_error",
+        message: "Invalid request payload.",
+        details: parsed.error.flatten(),
+        requestId
+      });
+    }
 
-  const projectSim = await server.simulateTransaction(projectTx);
-  if (rpc.Api.isSimulationError(projectSim) || !projectSim.result) {
-    return null;
+    try {
+      const projects = await listProjects(parsed.data.start, parsed.data.limit);
+      return res.status(200).json(projects);
+    } catch (error) {
+      if (error instanceof RequestValidationError) {
+        return res.status(400).json({
+          error: "validation_error",
+          message: error.message,
+          requestId
+        });
+      }
+      throw error;
+    }
+  } catch (error) {
+    return next(error);
   }
-
-  const projectRaw = projectSim.result.retval ? scValToNative(projectSim.result.retval) : null;
-  if (!projectRaw) {
-    return null;
-  }
-
-  // 2. Fetch project balance
-  const balanceTx = new TransactionBuilder(dummyAccount, {
-    fee: BASE_FEE,
-    networkPassphrase: config.networkPassphrase
-  })
-    .addOperation(contract.call("get_balance", nativeToScVal(projectId, { type: "symbol" })))
-    .setTimeout(30)
-    .build();
-
-  const balanceSim = await server.simulateTransaction(balanceTx);
-  const balance = (balanceSim.result && balanceSim.result.retval) ? scValToNative(balanceSim.result.retval) : 0;
-
-  const project = projectRaw as {
-    project_id: string;
-    title: string;
-    project_type: string;
-    token: string;
-    owner: string;
-    collaborators: Array<{ address: string; alias: string; basis_points: number }>;
-    locked: boolean;
-    total_distributed: string | number | bigint;
-    distribution_round: number;
-  };
-
-  return {
-    projectId: project.project_id,
-    title: project.title,
-    projectType: project.project_type,
-    token: project.token,
-    owner: project.owner,
-    collaborators: project.collaborators.map((collaborator) => ({
-      address: collaborator.address,
-      alias: collaborator.alias,
-      basisPoints: collaborator.basis_points
-    })),
-    locked: project.locked,
-    totalDistributed: String(project.total_distributed),
-    distributionRound: project.distribution_round,
-    balance: String(balance)
-  };
-}
+});
 
 splitsRouter.get("/:projectId", async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const projectIdRaw = req.params.projectId;
-    const projectId = typeof projectIdRaw === "string" ? projectIdRaw.trim() : "";
+    const requestId = res.locals.requestId;
+    const projectId = req.params.projectId?.trim();
     if (!projectId) {
       return res.status(400).json({
         error: "validation_error",
-        message: "projectId is required"
+        message: "projectId is required",
+        requestId
       });
     }
 
@@ -232,7 +242,8 @@ splitsRouter.get("/:projectId", async (req: Request, res: Response, next: NextFu
     if (!project) {
       return res.status(404).json({
         error: "not_found",
-        message: `Split project ${projectId} not found.`
+        message: `Split project ${projectId} not found.`,
+        requestId
       });
     }
 
@@ -242,14 +253,97 @@ splitsRouter.get("/:projectId", async (req: Request, res: Response, next: NextFu
   }
 });
 
-splitsRouter.post("/", async (req: Request, res: Response, next: NextFunction) => {
+splitsRouter.post("/:projectId/lock", async (req, res, next) => {
   try {
+    const requestId = res.locals.requestId;
+
+    const parsedParams = projectIdParamSchema.safeParse(req.params.projectId);
+    const parsedBody = lockProjectSchema.safeParse(req.body);
+
+    if (!parsedParams.success || !parsedBody.success) {
+      return res.status(400).json({
+        error: "validation_error",
+        message: "Invalid request payload.",
+        details: {
+          params: parsedParams.success ? null : parsedParams.error.flatten(),
+          body: parsedBody.success ? null : parsedBody.error.flatten()
+        },
+        requestId
+      });
+    }
+
+    try {
+      const result = await buildLockProjectUnsignedXdr({
+        projectId: parsedParams.data,
+        owner: parsedBody.data.owner
+      });
+      return res.status(200).json(result);
+    } catch (error) {
+      if (error instanceof RequestValidationError) {
+        return res.status(400).json({
+          error: "validation_error",
+          message: error.message,
+          requestId
+        });
+      }
+      throw error;
+    }
+  } catch (error) {
+    return next(error);
+  }
+});
+
+splitsRouter.put("/:projectId/collaborators", async (req, res, next) => {
+  try {
+    const requestId = res.locals.requestId;
+
+    const parsedParams = projectIdParamSchema.safeParse(req.params.projectId);
+    const parsedBody = updateCollaboratorsSchema.safeParse(req.body);
+
+    if (!parsedParams.success || !parsedBody.success) {
+      return res.status(400).json({
+        error: "validation_error",
+        message: "Invalid request payload.",
+        details: {
+          params: parsedParams.success ? null : parsedParams.error.flatten(),
+          body: parsedBody.success ? null : parsedBody.error.flatten()
+        },
+        requestId
+      });
+    }
+
+    try {
+      const result = await buildUpdateCollaboratorsUnsignedXdr({
+        projectId: parsedParams.data,
+        owner: parsedBody.data.owner,
+        collaborators: parsedBody.data.collaborators
+      });
+      return res.status(200).json(result);
+    } catch (error) {
+      if (error instanceof RequestValidationError) {
+        return res.status(400).json({
+          error: "validation_error",
+          message: error.message,
+          requestId
+        });
+      }
+      throw error;
+    }
+  } catch (error) {
+    return next(error);
+  }
+});
+
+splitsRouter.post("/", async (req, res, next) => {
+  try {
+    const requestId = res.locals.requestId;
     const parsed = createSplitSchema.safeParse(req.body);
     if (!parsed.success) {
       return res.status(400).json({
         error: "validation_error",
         message: "Invalid request payload.",
-        details: parsed.error.flatten()
+        details: parsed.error.flatten(),
+        requestId
       });
     }
 
@@ -260,7 +354,8 @@ splitsRouter.post("/", async (req: Request, res: Response, next: NextFunction) =
       if (error instanceof RequestValidationError) {
         return res.status(400).json({
           error: "validation_error",
-          message: error.message
+          message: error.message,
+          requestId
         });
       }
       throw error;
@@ -271,7 +366,7 @@ splitsRouter.post("/", async (req: Request, res: Response, next: NextFunction) =
 });
 
 const distributeSchema = z.object({
-  sourceAddress: z.string().min(1, "sourceAddress is required")
+  sourceAddress: z.string().min(1, "sourceAddress is required").optional()
 });
 
 splitsRouter.post("/:projectId/distribute", async (req: Request, res: Response, next: NextFunction) => {
@@ -298,8 +393,9 @@ splitsRouter.post("/:projectId/distribute", async (req: Request, res: Response, 
     const server = new rpc.Server(config.sorobanRpcUrl, { allowHttp: true });
 
     let sourceAccount;
+    const sourceAddress = parsed.data?.sourceAddress || config.simulatorAccount;
     try {
-      sourceAccount = await server.getAccount(parsed.data.sourceAddress);
+      sourceAccount = await server.getAccount(sourceAddress);
     } catch {
       return res.status(400).json({
         error: "validation_error",
@@ -325,7 +421,7 @@ splitsRouter.post("/:projectId/distribute", async (req: Request, res: Response, 
       metadata: {
         contractId: config.contractId,
         networkPassphrase: config.networkPassphrase,
-        sourceAccount: parsed.data.sourceAddress,
+        sourceAccount: sourceAddress,
         operation: "distribute"
       }
     });

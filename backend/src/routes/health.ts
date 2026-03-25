@@ -24,10 +24,12 @@ healthRouter.get("/ready", (_req, res) => {
       status: "ready"
     });
   } catch {
+    const requestId = res.locals.requestId;
     res.status(503).json({
       status: "not_ready",
       error: "missing_config",
-      message: "Required Stellar environment variables are missing."
+      message: "Required Stellar environment variables are missing.",
+      requestId
     });
   }
 });

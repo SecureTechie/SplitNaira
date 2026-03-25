@@ -30,10 +30,12 @@ export function validateRequest(schemas: ValidationSchemas): RequestHandler {
       next();
     } catch (error) {
       if (error instanceof z.ZodError) {
+        const requestId = res.locals.requestId;
         res.status(400).json({
           error: "validation_error",
           message: "Request validation failed.",
-          details: buildValidationDetails(error)
+          details: buildValidationDetails(error),
+          requestId
         });
         return;
       }
