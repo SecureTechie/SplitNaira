@@ -516,7 +516,7 @@ splitsRouter.post("/", async (req, res, next) => {
 });
 
 const distributeSchema = z.object({
-  sourceAddress: z.string().min(1, "sourceAddress is required")
+  sourceAddress: z.string().min(1, "sourceAddress is required").optional()
 });
 
 splitsRouter.post("/:projectId/distribute", async (req: Request, res: Response, next: NextFunction) => {
@@ -542,8 +542,9 @@ splitsRouter.post("/:projectId/distribute", async (req: Request, res: Response, 
     const server = new rpc.Server(config.sorobanRpcUrl, { allowHttp: true });
 
     let sourceAccount;
+    const sourceAddress = parsed.data?.sourceAddress || config.simulatorAccount;
     try {
-      sourceAccount = await server.getAccount(parsed.data.sourceAddress);
+      sourceAccount = await server.getAccount(sourceAddress);
     } catch {
       return res.status(400).json({
         error: "validation_error",
@@ -569,7 +570,7 @@ splitsRouter.post("/:projectId/distribute", async (req: Request, res: Response, 
       metadata: {
         contractId: config.contractId,
         networkPassphrase: config.networkPassphrase,
-        sourceAccount: parsed.data.sourceAddress,
+        sourceAccount: sourceAddress,
         operation: "distribute"
       }
     });
