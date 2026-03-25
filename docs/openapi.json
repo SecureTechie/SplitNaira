@@ -1,0 +1,480 @@
+{
+  "openapi": "3.0.1",
+  "info": {
+    "title": "SplitNaira API",
+    "version": "0.1.0",
+    "description": "API for building unsigned Stellar/Soroban transactions and reading Split projects."
+  },
+  "servers": [
+    {
+      "url": "http://localhost:3001"
+    }
+  ],
+  "tags": [
+    {
+      "name": "health"
+    },
+    {
+      "name": "splits"
+    }
+  ],
+  "components": {
+    "securitySchemes": {},
+    "schemas": {
+      "RequestIdError": {
+        "type": "object",
+        "required": [
+          "error",
+          "message",
+          "requestId"
+        ],
+        "properties": {
+          "error": {
+            "type": "string",
+            "example": "validation_error"
+          },
+          "message": {
+            "type": "string",
+            "example": "Invalid request payload."
+          },
+          "requestId": {
+            "type": "string",
+            "example": "c9d9f4d9-2c0a-4f7c-92cf-7d3db4f0d4b4"
+          },
+          "details": {
+            "description": "Optional validation details; shape varies by endpoint.",
+            "type": "object",
+            "additionalProperties": true
+          },
+          "status": {
+            "type": "string",
+            "example": "not_ready"
+          }
+        },
+        "additionalProperties": false
+      },
+      "BuildTransactionMetadata": {
+        "type": "object",
+        "required": [
+          "contractId",
+          "networkPassphrase",
+          "sourceAccount",
+          "sequenceNumber",
+          "fee",
+          "operation"
+        ],
+        "properties": {
+          "contractId": {
+            "type": "string",
+            "example": "C1234abcd..."
+          },
+          "networkPassphrase": {
+            "type": "string",
+            "example": "Test SDF Network ; September 2015"
+          },
+          "sourceAccount": {
+            "type": "string",
+            "example": "GABCDEF12345..."
+          },
+          "sequenceNumber": {
+            "oneOf": [
+              { "type": "integer" },
+              { "type": "string" }
+            ],
+            "example": 123
+          },
+          "fee": {
+            "oneOf": [
+              { "type": "integer" },
+              { "type": "string" }
+            ],
+            "example": 100
+          },
+          "operation": {
+            "type": "string",
+            "example": "lock_project"
+          }
+        },
+        "additionalProperties": true
+      },
+      "BuildTransactionResponse": {
+        "type": "object",
+        "required": [
+          "xdr",
+          "metadata"
+        ],
+        "properties": {
+          "xdr": {
+            "type": "string",
+            "description": "Unsigned (prepared) transaction XDR; the caller must sign and submit."
+          },
+          "metadata": {
+            "$ref": "#/components/schemas/BuildTransactionMetadata"
+          }
+        },
+        "additionalProperties": false
+      },
+      "HealthResponse": {
+        "type": "object",
+        "required": [
+          "status",
+          "uptime",
+          "timestamp"
+        ],
+        "properties": {
+          "status": { "type": "string", "example": "ok" },
+          "uptime": { "type": "number", "example": 12.34 },
+          "timestamp": { "type": "string", "format": "date-time" }
+        },
+        "additionalProperties": false
+      },
+      "ReadyResponse": {
+        "type": "object",
+        "required": [
+          "status"
+        ],
+        "properties": {
+          "status": { "type": "string", "example": "ready" }
+        },
+        "additionalProperties": false
+      },
+      "SplitCollaborator": {
+        "type": "object",
+        "required": [
+          "address",
+          "alias",
+          "basisPoints"
+        ],
+        "properties": {
+          "address": { "type": "string", "example": "GABCDEF12345..." },
+          "alias": { "type": "string", "example": "Burna B." },
+          "basisPoints": { "type": "integer", "example": 5000 }
+        },
+        "additionalProperties": false
+      },
+      "SplitProject": {
+        "type": "object",
+        "required": [
+          "projectId",
+          "title",
+          "projectType",
+          "token",
+          "owner",
+          "collaborators",
+          "locked",
+          "totalDistributed",
+          "distributionRound"
+        ],
+        "properties": {
+          "projectId": { "type": "string", "example": "afrobeats_001" },
+          "title": { "type": "string", "example": "Afrobeats Compilation" },
+          "projectType": { "type": "string", "example": "music" },
+          "token": { "type": "string", "example": "CDEF1234..." },
+          "owner": { "type": "string", "example": "GABCDEF12345..." },
+          "collaborators": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/SplitCollaborator" },
+            "example": [
+              { "address": "GAAAA...", "alias": "Artist A", "basisPoints": 6000 },
+              { "address": "GBBBB...", "alias": "Artist B", "basisPoints": 4000 }
+            ]
+          },
+          "locked": { "type": "boolean", "example": false },
+          "totalDistributed": { "type": "string", "example": "0" },
+          "distributionRound": { "type": "integer", "example": 0 }
+        },
+        "additionalProperties": false
+      },
+      "CreateSplitCollaboratorInput": {
+        "type": "object",
+        "required": [
+          "address",
+          "alias",
+          "basisPoints"
+        ],
+        "properties": {
+          "address": { "type": "string", "example": "GABCDEF12345..." },
+          "alias": { "type": "string", "example": "Burna B." },
+          "basisPoints": { "type": "integer", "example": 5000 }
+        },
+        "additionalProperties": false
+      },
+      "CreateSplitRequest": {
+        "type": "object",
+        "required": [
+          "owner",
+          "projectId",
+          "title",
+          "projectType",
+          "token",
+          "collaborators"
+        ],
+        "properties": {
+          "owner": { "type": "string", "example": "GABCDEF12345..." },
+          "projectId": { "type": "string", "example": "afrobeats_001" },
+          "title": { "type": "string", "example": "Afrobeats Compilation" },
+          "projectType": { "type": "string", "example": "music" },
+          "token": { "type": "string", "example": "CDEF1234..." },
+          "collaborators": {
+            "type": "array",
+            "minItems": 2,
+            "items": { "$ref": "#/components/schemas/CreateSplitCollaboratorInput" },
+            "example": [
+              { "address": "GAAAA...", "alias": "Artist A", "basisPoints": 6000 },
+              { "address": "GBBBB...", "alias": "Artist B", "basisPoints": 4000 }
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
+      "LockProjectRequest": {
+        "type": "object",
+        "required": [
+          "owner"
+        ],
+        "properties": {
+          "owner": { "type": "string", "example": "GABCDEF12345..." }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "paths": {
+    "/health": {
+      "get": {
+        "tags": [
+          "health"
+        ],
+        "summary": "Health check",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HealthResponse" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/health/live": {
+      "get": {
+        "tags": [
+          "health"
+        ],
+        "summary": "Liveness check",
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/health/ready": {
+      "get": {
+        "tags": [
+          "health"
+        ],
+        "summary": "Readiness check",
+        "responses": {
+          "200": {
+            "description": "Ready",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ReadyResponse" }
+              }
+            }
+          },
+          "503": {
+            "description": "Not ready",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/RequestIdError" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/splits": {
+      "post": {
+        "tags": [
+          "splits"
+        ],
+        "summary": "Build unsigned transaction to create a split project",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/CreateSplitRequest" },
+              "example": {
+                "owner": "GABCDEF12345...",
+                "projectId": "afrobeats_001",
+                "title": "Afrobeats Compilation",
+                "projectType": "music",
+                "token": "CDEF1234...",
+                "collaborators": [
+                  { "address": "GAAAA...", "alias": "Artist A", "basisPoints": 6000 },
+                  { "address": "GBBBB...", "alias": "Artist B", "basisPoints": 4000 }
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Transaction built",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/BuildTransactionResponse" }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/RequestIdError" }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/RequestIdError" }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/RequestIdError" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/splits/{projectId}": {
+      "get": {
+        "tags": [
+          "splits"
+        ],
+        "summary": "Fetch split project by ID",
+        "parameters": [
+          {
+            "name": "projectId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "example": "afrobeats_001"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Project found",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/SplitProject" }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/RequestIdError" }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/RequestIdError" }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/RequestIdError" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/splits/{projectId}/lock": {
+      "post": {
+        "tags": [
+          "splits"
+        ],
+        "summary": "Build unsigned transaction to lock a split project",
+        "parameters": [
+          {
+            "name": "projectId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "example": "afrobeats_001"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/LockProjectRequest" },
+              "example": {
+                "owner": "GABCDEF12345..."
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Transaction built",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/BuildTransactionResponse" }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/RequestIdError" }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/RequestIdError" }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/RequestIdError" }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
