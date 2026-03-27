@@ -7,6 +7,7 @@ import {
   TransactionBuilder,
   nativeToScVal,
   rpc,
+  scValToNative,
   xdr
 } from "@stellar/stellar-sdk";
 
@@ -189,6 +190,179 @@ async function buildCreateProjectUnsignedXdr(
   };
 }
 
+async function listProjects(start: number, limit: number) {
+  const config = loadStellarConfig();
+  const server = new rpc.Server(config.sorobanRpcUrl, { allowHttp: true });
+
+  let sourceAccount;
+  try {
+    sourceAccount = await server.getAccount(config.simulatorAccount);
+  } catch {
+    throw new RequestValidationError("simulator account not found on selected network");
+  }
+
+  const contract = new Contract(config.contractId);
+  const tx = new TransactionBuilder(sourceAccount, {
+    fee: BASE_FEE,
+    networkPassphrase: config.networkPassphrase
+  })
+    .addOperation(
+      contract.call("list_projects", xdr.ScVal.scvU32(start), xdr.ScVal.scvU32(limit))
+    )
+    .setTimeout(300)
+    .build();
+
+  const simulated = await server.simulateTransaction(tx);
+  const retval = "result" in simulated ? simulated.result?.retval : undefined;
+  if (!retval) {
+    return [];
+  }
+
+  return scValToNative(retval) as unknown[];
+}
+
+async function fetchProjectById(projectId: string) {
+  const config = loadStellarConfig();
+  const server = new rpc.Server(config.sorobanRpcUrl, { allowHttp: true });
+
+  let sourceAccount;
+  try {
+    sourceAccount = await server.getAccount(config.simulatorAccount);
+  } catch {
+    throw new RequestValidationError("simulator account not found on selected network");
+  }
+
+  const contract = new Contract(config.contractId);
+  const tx = new TransactionBuilder(sourceAccount, {
+    fee: BASE_FEE,
+    networkPassphrase: config.networkPassphrase
+  })
+    .addOperation(contract.call("get_project", nativeToScVal(projectId, { type: "symbol" })))
+    .setTimeout(300)
+    .build();
+
+  const simulated = await server.simulateTransaction(tx);
+  const retval = "result" in simulated ? simulated.result?.retval : undefined;
+  if (!retval) {
+    return null;
+  }
+
+  const project = scValToNative(retval) as unknown;
+  return project ?? null;
+}
+
+interface LockProjectRequest {
+  projectId: string;
+  owner: string;
+}
+
+async function buildLockProjectUnsignedXdr(input: LockProjectRequest) {
+  const config = loadStellarConfig();
+  const server = new rpc.Server(config.sorobanRpcUrl, { allowHttp: true });
+
+  let sourceAccount;
+  try {
+    sourceAccount = await server.getAccount(input.owner);
+  } catch {
+    throw new RequestValidationError("owner account not found on selected network");
+  }
+
+  let ownerAddress: Address;
+  try {
+    ownerAddress = Address.fromString(input.owner);
+  } catch {
+    throw new RequestValidationError("owner address must be a valid Stellar address");
+  }
+
+  const contract = new Contract(config.contractId);
+  const tx = new TransactionBuilder(sourceAccount, {
+    fee: BASE_FEE,
+    networkPassphrase: config.networkPassphrase
+  })
+    .addOperation(
+      contract.call(
+        "lock_project",
+        nativeToScVal(input.projectId, { type: "symbol" }),
+        ownerAddress.toScVal()
+      )
+    )
+    .setTimeout(300)
+    .build();
+
+  const preparedTx = await server.prepareTransaction(tx);
+  return {
+    xdr: preparedTx.toXDR(),
+    metadata: {
+      contractId: config.contractId,
+      networkPassphrase: config.networkPassphrase,
+      sourceAccount: input.owner,
+      sequenceNumber: preparedTx.sequence,
+      fee: preparedTx.fee,
+      operation: "lock_project"
+    }
+  };
+}
+
+interface UpdateCollaboratorsRequest {
+  projectId: string;
+  owner: string;
+  collaborators: Array<z.infer<typeof collaboratorSchema>>;
+}
+
+async function buildUpdateCollaboratorsUnsignedXdr(
+  input: UpdateCollaboratorsRequest
+) {
+  const config = loadStellarConfig();
+  const server = new rpc.Server(config.sorobanRpcUrl, { allowHttp: true });
+
+  let sourceAccount;
+  try {
+    sourceAccount = await server.getAccount(input.owner);
+  } catch {
+    throw new RequestValidationError("owner account not found on selected network");
+  }
+
+  let ownerAddress: Address;
+  let collaboratorScVals: xdr.ScVal[];
+  try {
+    ownerAddress = Address.fromString(input.owner);
+    collaboratorScVals = input.collaborators.map((collaborator) =>
+      toCollaboratorScVal(collaborator)
+    );
+  } catch {
+    throw new RequestValidationError("owner/token/collaborator addresses must be valid Stellar addresses");
+  }
+
+  const contract = new Contract(config.contractId);
+  const tx = new TransactionBuilder(sourceAccount, {
+    fee: BASE_FEE,
+    networkPassphrase: config.networkPassphrase
+  })
+    .addOperation(
+      contract.call(
+        "update_collaborators",
+        nativeToScVal(input.projectId, { type: "symbol" }),
+        ownerAddress.toScVal(),
+        xdr.ScVal.scvVec(collaboratorScVals)
+      )
+    )
+    .setTimeout(300)
+    .build();
+
+  const preparedTx = await server.prepareTransaction(tx);
+  return {
+    xdr: preparedTx.toXDR(),
+    metadata: {
+      contractId: config.contractId,
+      networkPassphrase: config.networkPassphrase,
+      sourceAccount: input.owner,
+      sequenceNumber: preparedTx.sequence,
+      fee: preparedTx.fee,
+      operation: "update_collaborators"
+    }
+  };
+}
+
 const listProjectsSchema = z.object({
   start: z.coerce.number().int().min(0).default(0),
   limit: z.coerce.number().int().min(1).max(100).default(10)
@@ -229,7 +403,8 @@ splitsRouter.get("/", async (req: Request, res: Response, next: NextFunction) =>
 splitsRouter.get("/:projectId", async (req: Request, res: Response, next: NextFunction) => {
   try {
     const requestId = res.locals.requestId;
-    const projectId = req.params.projectId?.trim();
+    const projectIdRaw = req.params.projectId;
+    const projectId = typeof projectIdRaw === "string" ? projectIdRaw.trim() : "";
     if (!projectId) {
       return res.status(400).json({
         error: "validation_error",
@@ -444,15 +619,13 @@ splitsRouter.get("/:projectId/history", async (req: Request, res: Response, next
     const config = loadStellarConfig();
     const server = new rpc.Server(config.sorobanRpcUrl, { allowHttp: true });
 
-    const projectIdSymbol = nativeToScVal(projectId, { type: "symbol" });
-
     // 1. Fetch distribution_complete events
     const roundEventResponse = await server.getEvents({
+      cursor: "",
       filters: [
         {
           type: "contract",
-          contractIds: [config.contractId],
-          topics: [[nativeToScVal("distribution_complete", { type: "symbol" }), projectIdSymbol]]
+          contractIds: [config.contractId]
         }
       ],
       limit: 100
@@ -460,11 +633,11 @@ splitsRouter.get("/:projectId/history", async (req: Request, res: Response, next
 
     // 2. Fetch payment_sent events
     const paymentEventResponse = await server.getEvents({
+      cursor: "",
       filters: [
         {
           type: "contract",
-          contractIds: [config.contractId],
-          topics: [[nativeToScVal("payment_sent", { type: "symbol" }), projectIdSymbol]]
+          contractIds: [config.contractId]
         }
       ],
       limit: 100

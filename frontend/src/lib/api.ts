@@ -15,6 +15,16 @@ export interface CreateSplitPayload {
   }>;
 }
 
+export interface ProjectHistoryItem {
+  id: string;
+  type: "round" | "payment";
+  round: number;
+  amount: string | number;
+  recipient: string;
+  ledgerCloseTime: number;
+  txHash: string;
+}
+
 interface BuildSplitResponse {
   xdr: string;
   metadata: {
@@ -74,10 +84,12 @@ export async function getSplit(projectId: string): Promise<SplitProject> {
   return body as SplitProject;
 }
 
-export async function getProjectHistory(projectId: string): Promise<any[]> {
+export async function getProjectHistory(
+  projectId: string,
+): Promise<ProjectHistoryItem[]> {
   const response = await fetch(`${API_BASE_URL}/splits/${encodeURIComponent(projectId)}/history`);
   if (!response.ok) {
     throw new Error("Failed to fetch project history");
   }
-  return response.json();
+  return (await response.json()) as ProjectHistoryItem[];
 }

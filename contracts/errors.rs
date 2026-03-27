@@ -43,4 +43,10 @@ pub enum SplitError {
 
     /// Contract admin is not configured yet
     AdminNotSet = 13,
+
+    /// Arithmetic overflow while aggregating balances or basis points
+    ArithmeticOverflow = 14,
+
+    /// Requested unallocated withdrawal exceeds available amount
+    InsufficientUnallocated = 15,
 }

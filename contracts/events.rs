@@ -74,4 +74,22 @@ impl SplitEvents {
             project_id.clone(),
         );
     }
+
+    /// Emitted when admin withdraws unallocated token balance.
+    ///
+    /// Topics: ["unallocated_withdrawn", token]
+    /// Data:   (admin, to, amount, remaining_unallocated)
+    pub fn unallocated_withdrawn(
+        env: &Env,
+        token: &Address,
+        admin: &Address,
+        to: &Address,
+        amount: i128,
+        remaining_unallocated: i128,
+    ) {
+        env.events().publish(
+            (Symbol::new(env, "unallocated_withdrawn"), token.clone()),
+            (admin.clone(), to.clone(), amount, remaining_unallocated),
+        );
+    }
 }

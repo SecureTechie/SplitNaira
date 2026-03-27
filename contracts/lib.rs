@@ -1,6 +1,8 @@
 #![no_std]
 
-use soroban_sdk::{contract, contractimpl, contracttype, token, Address, Env, String, Symbol, Vec};
+use soroban_sdk::{
+    contract, contractimpl, contracttype, token, Address, Env, Map, String, Symbol, Vec,
+};
 
 mod errors;
 mod events;
@@ -208,7 +210,7 @@ impl SplitNairaContract {
         }
 
         Self::validate_token_allowlist(&env, &token)?;
-        Self::validate_collaborators(&collaborators)?;
+        Self::validate_collaborators(&env, &collaborators)?;
 
         let project = SplitProject {
             project_id: project_id.clone(),
@@ -280,7 +282,7 @@ impl SplitNairaContract {
             return Err(SplitError::ProjectLocked);
         }
 
-        Self::validate_collaborators(&collaborators)?;
+        Self::validate_collaborators(&env, &collaborators)?;
 
         project.collaborators = collaborators;
         env.storage()
@@ -356,10 +358,9 @@ impl SplitNairaContract {
             .unwrap_or(0);
 
         let new_balance = prev_balance + amount;
-        env.storage().persistent().set(
-            &DataKey::ProjectBalance(project_id.clone()),
-            &new_balance,
-        );
+        env.storage()
+            .persistent()
+            .set(&DataKey::ProjectBalance(project_id.clone()), &new_balance);
 
         SplitEvents::deposit_received(&env, &project_id, &from, amount);
 
@@ -472,6 +473,13 @@ impl SplitNairaContract {
         project
     }
 
+    /// Returns true if the project key exists in persistent storage.
+    pub fn project_exists(env: Env, project_id: Symbol) -> bool {
+        env.storage()
+            .persistent()
+            .has(&DataKey::Project(project_id))
+    }
+
     /// Returns how much a specific address has been paid for a project.
     pub fn get_claimed(env: Env, project_id: Symbol, address: Address) -> i128 {
         env.storage()
@@ -568,6 +576,50 @@ impl SplitNairaContract {
             .persistent()
             .get::<DataKey, i128>(&DataKey::ProjectBalance(project_id))
             .unwrap_or(0))
+    }
+
+    /// Returns contract token balance not accounted for in any project balance.
+    ///
+    /// `unallocated = token_balance(contract) - sum(project_balances_for_token)`
+    pub fn get_unallocated_balance(env: Env, token: Address) -> Result<i128, SplitError> {
+        let contract_address = env.current_contract_address();
+        let token_client = token::Client::new(&env, &token);
+        let contract_token_balance = token_client.balance(&contract_address);
+
+        let accounted = Self::sum_project_balances_for_token(&env, &token)?;
+        Ok(contract_token_balance - accounted)
+    }
+
+    /// Admin-only recovery for direct token transfers into the contract address.
+    ///
+    /// This method can only withdraw the currently unallocated portion for the
+    /// specified token and never touches any project-accounted balance.
+    pub fn withdraw_unallocated(
+        env: Env,
+        admin: Address,
+        token: Address,
+        to: Address,
+        amount: i128,
+    ) -> Result<(), SplitError> {
+        Self::require_contract_admin(&env, &admin)?;
+
+        if amount <= 0 {
+            return Err(SplitError::InvalidAmount);
+        }
+
+        let available = Self::get_unallocated_balance(env.clone(), token.clone())?;
+        if amount > available {
+            return Err(SplitError::InsufficientUnallocated);
+        }
+
+        let contract_address = env.current_contract_address();
+        let token_client = token::Client::new(&env, &token);
+        token_client.transfer(&contract_address, &to, &amount);
+
+        let remaining = available - amount;
+        SplitEvents::unallocated_withdrawn(&env, &token, &admin, &to, amount, remaining);
+
+        Ok(())
     }
 
     /// Returns true if a token is currently allowlisted.
@@ -750,23 +802,29 @@ impl SplitNairaContract {
         Ok(())
     }
 
-    fn validate_collaborators(collaborators: &Vec<Collaborator>) -> Result<(), SplitError> {
+    fn validate_collaborators(
+        env: &Env,
+        collaborators: &Vec<Collaborator>,
+    ) -> Result<(), SplitError> {
         if collaborators.len() < 2 {
             return Err(SplitError::TooFewCollaborators);
         }
 
         let mut total_bp: u32 = 0;
-        for (i, collab) in collaborators.iter().enumerate() {
+        let mut seen: Map<Address, bool> = Map::new(env);
+
+        for collab in collaborators.iter() {
             if collab.basis_points == 0 {
                 return Err(SplitError::ZeroShare);
             }
-            total_bp += collab.basis_points;
+            total_bp = total_bp
+                .checked_add(collab.basis_points)
+                .ok_or(SplitError::ArithmeticOverflow)?;
 
-            for (j, other) in collaborators.iter().enumerate() {
-                if i != j && collab.address == other.address {
-                    return Err(SplitError::DuplicateCollaborator);
-                }
+            if seen.contains_key(collab.address.clone()) {
+                return Err(SplitError::DuplicateCollaborator);
             }
+            seen.set(collab.address.clone(), true);
         }
 
         if total_bp != 10_000 {
@@ -774,5 +832,35 @@ impl SplitNairaContract {
         }
 
         Ok(())
+    }
+
+    fn sum_project_balances_for_token(env: &Env, token: &Address) -> Result<i128, SplitError> {
+        let project_ids: Vec<Symbol> = env
+            .storage()
+            .persistent()
+            .get::<DataKey, Vec<Symbol>>(&DataKey::ProjectIds)
+            .unwrap_or(Vec::new(env));
+
+        let mut total: i128 = 0;
+        for project_id in project_ids.iter() {
+            if let Some(project) = env
+                .storage()
+                .persistent()
+                .get::<DataKey, SplitProject>(&DataKey::Project(project_id.clone()))
+            {
+                if project.token == token.clone() {
+                    let project_balance = env
+                        .storage()
+                        .persistent()
+                        .get::<DataKey, i128>(&DataKey::ProjectBalance(project_id))
+                        .unwrap_or(0);
+                    total = total
+                        .checked_add(project_balance)
+                        .ok_or(SplitError::ArithmeticOverflow)?;
+                }
+            }
+        }
+
+        Ok(total)
     }
 }

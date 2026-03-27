@@ -1,7 +1,10 @@
 #![cfg(test)]
 
 use super::*;
-use soroban_sdk::{testutils::{Address as _, Events as _}, token, Address, Env, String, Symbol, Vec};
+use soroban_sdk::{
+    testutils::{Address as _, Events as _},
+    token, Address, Env, String, Symbol, Vec,
+};
 
 // ============================================================
 //  TEST HELPERS
@@ -1097,7 +1100,14 @@ fn test_get_claimable_after_distribution() {
         &collabs,
     );
 
-    deposit_to_project(&env, &client, &token, &project_id, &funder, 1_000_0000000i128);
+    deposit_to_project(
+        &env,
+        &client,
+        &token,
+        &project_id,
+        &funder,
+        1_000_0000000i128,
+    );
     client.distribute(&project_id);
 
     let alice_info = client.get_claimable(&project_id, &alice);
@@ -1309,4 +1319,160 @@ fn test_update_project_metadata_emits_event() {
 
     // At least one new event (metadata_updated) was emitted
     assert!(env.events().all().len() > events_before);
+}
+
+// ============================================================
+//  project_exists QUERY TESTS
+// ============================================================
+
+#[test]
+fn test_project_exists_returns_true_for_existing_project() {
+    let (env, _admin, token) = create_test_env();
+    let contract_id = env.register_contract(None, SplitNairaContract);
+    let client = SplitNairaContractClient::new(&env, &contract_id);
+
+    let owner = Address::generate(&env);
+    let alice = Address::generate(&env);
+    let bob = Address::generate(&env);
+    let collabs = make_collaborators(
+        &env,
+        Vec::from_slice(&env, &[alice, bob]),
+        Vec::from_slice(&env, &[5000u32, 5000u32]),
+    );
+
+    let project_id = Symbol::new(&env, "exists_true");
+    client.create_project(
+        &owner,
+        &project_id,
+        &String::from_str(&env, "Exists True"),
+        &String::from_str(&env, "music"),
+        &token,
+        &collabs,
+    );
+
+    assert_eq!(client.project_exists(&project_id), true);
+}
+
+#[test]
+fn test_project_exists_returns_false_for_missing_project() {
+    let (env, _admin, _token) = create_test_env();
+    let contract_id = env.register_contract(None, SplitNairaContract);
+    let client = SplitNairaContractClient::new(&env, &contract_id);
+
+    assert_eq!(
+        client.project_exists(&Symbol::new(&env, "does_not_exist")),
+        false
+    );
+}
+
+// ============================================================
+//  unallocated RECOVERY TESTS
+// ============================================================
+
+#[test]
+fn test_withdraw_unallocated_success_and_project_balance_unchanged() {
+    let (env, _token_admin, token) = create_test_env();
+    let contract_id = env.register_contract(None, SplitNairaContract);
+    let client = SplitNairaContractClient::new(&env, &contract_id);
+
+    let contract_admin = Address::generate(&env);
+    client.set_admin(&contract_admin);
+
+    let owner = Address::generate(&env);
+    let funder = Address::generate(&env);
+    let donor = Address::generate(&env);
+    let recovery_to = Address::generate(&env);
+    let alice = Address::generate(&env);
+    let bob = Address::generate(&env);
+
+    let project_id = Symbol::new(&env, "recovery_base");
+    let collabs = make_collaborators(
+        &env,
+        Vec::from_slice(&env, &[alice, bob]),
+        Vec::from_slice(&env, &[7000u32, 3000u32]),
+    );
+    client.create_project(
+        &owner,
+        &project_id,
+        &String::from_str(&env, "Recovery Base"),
+        &String::from_str(&env, "music"),
+        &token,
+        &collabs,
+    );
+
+    // Accounted project funds.
+    deposit_to_project(
+        &env,
+        &client,
+        &token,
+        &project_id,
+        &funder,
+        1_000_0000000i128,
+    );
+
+    // Unaccounted direct transfer to contract address.
+    let token_admin_client = token::StellarAssetClient::new(&env, &token);
+    token_admin_client.mint(&donor, &300_0000000i128);
+    let token_client = token::Client::new(&env, &token);
+    token_client.transfer(&donor, &contract_id, &300_0000000i128);
+
+    assert_eq!(client.get_unallocated_balance(&token), 300_0000000i128);
+
+    client.withdraw_unallocated(&contract_admin, &token, &recovery_to, &200_0000000i128);
+
+    assert_eq!(client.get_unallocated_balance(&token), 100_0000000i128);
+    assert_eq!(token_client.balance(&recovery_to), 200_0000000i128);
+    assert_eq!(client.get_balance(&project_id), 1_000_0000000i128);
+}
+
+#[test]
+fn test_withdraw_unallocated_fails_when_amount_exceeds_available() {
+    let (env, _token_admin, token) = create_test_env();
+    let contract_id = env.register_contract(None, SplitNairaContract);
+    let client = SplitNairaContractClient::new(&env, &contract_id);
+
+    let contract_admin = Address::generate(&env);
+    client.set_admin(&contract_admin);
+
+    let donor = Address::generate(&env);
+    let recovery_to = Address::generate(&env);
+
+    let token_admin_client = token::StellarAssetClient::new(&env, &token);
+    token_admin_client.mint(&donor, &100_0000000i128);
+    let token_client = token::Client::new(&env, &token);
+    token_client.transfer(&donor, &contract_id, &100_0000000i128);
+
+    let result =
+        client.try_withdraw_unallocated(&contract_admin, &token, &recovery_to, &200_0000000i128);
+    assert_eq!(result, Err(Ok(SplitError::InsufficientUnallocated)));
+}
+
+#[test]
+fn test_withdraw_unallocated_fails_when_unauthorized() {
+    let (env, _token_admin, token) = create_test_env();
+    let contract_id = env.register_contract(None, SplitNairaContract);
+    let client = SplitNairaContractClient::new(&env, &contract_id);
+
+    let contract_admin = Address::generate(&env);
+    let unauthorized = Address::generate(&env);
+    let recovery_to = Address::generate(&env);
+    client.set_admin(&contract_admin);
+
+    let result =
+        client.try_withdraw_unallocated(&unauthorized, &token, &recovery_to, &1_0000000i128);
+    assert_eq!(result, Err(Ok(SplitError::Unauthorized)));
+}
+
+#[test]
+fn test_withdraw_unallocated_fails_with_invalid_amount() {
+    let (env, _token_admin, token) = create_test_env();
+    let contract_id = env.register_contract(None, SplitNairaContract);
+    let client = SplitNairaContractClient::new(&env, &contract_id);
+
+    let contract_admin = Address::generate(&env);
+    let recovery_to = Address::generate(&env);
+    client.set_admin(&contract_admin);
+
+    let result = client.try_withdraw_unallocated(&contract_admin, &token, &recovery_to, &0i128);
+    assert_eq!(result, Err(Ok(SplitError::InvalidAmount)));
 }

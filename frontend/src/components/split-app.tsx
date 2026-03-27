@@ -9,6 +9,7 @@ import {
   buildDistributeXdr,
   getProjectHistory,
   getSplit,
+  type ProjectHistoryItem,
 } from "@/lib/api";
 import {
   connectFreighter,
@@ -58,7 +59,7 @@ export function SplitApp() {
   );
   const [isFetchingProject, setIsFetchingProject] = useState(false);
   const [showDistributeModal, setShowDistributeModal] = useState(false);
-  const [history, setHistory] = useState<any[]>([]);
+  const [history, setHistory] = useState<ProjectHistoryItem[]>([]);
   const [isLoadingHistory, setIsLoadingHistory] = useState(false);
 
   const totalBasisPoints = useMemo(
