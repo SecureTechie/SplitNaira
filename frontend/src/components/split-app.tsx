@@ -27,9 +27,19 @@ interface CollaboratorInput {
   basisPoints: string;
 }
 
-const initialCollaborators: CollaboratorInput[] = [
-  { id: crypto.randomUUID(), address: "", alias: "", basisPoints: "5000" },
-  { id: crypto.randomUUID(), address: "", alias: "", basisPoints: "5000" },
+// Use static IDs instead of random UUIDs to avoid hydration mismatches
+const getInitialCollaborators = (): CollaboratorInput[] => [
+  { id: "collab-1", address: "", alias: "", basisPoints: "5000" },
+  { id: "collab-2", address: "", alias: "", basisPoints: "5000" },
+];
+
+// Seeded project IDs for Phase 3 Projects list view
+const SEEDED_PROJECT_IDS = [
+  "afrobeats_001",
+  "diaspora_sounds_02",
+  "naija_vibes_03",
+  "west_african_beats_04",
+  "cultural_resonance_05",
 ];
 
 export function SplitApp() {
@@ -44,15 +54,14 @@ export function SplitApp() {
   const [title, setTitle] = useState("");
   const [projectType, setProjectType] = useState("music");
   const [token, setToken] = useState("");
-  const [collaborators, setCollaborators] =
-    useState<CollaboratorInput[]>(initialCollaborators);
+  const [collaborators, setCollaborators] = useState<CollaboratorInput[]>(getInitialCollaborators());
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [txHash, setTxHash] = useState<string | null>(null);
   const [createdProject, setCreatedProject] = useState<SplitProject | null>(
     null,
   );
 
-  const [activeTab, setActiveTab] = useState<"create" | "manage">("create");
+  const [activeTab, setActiveTab] = useState<"create" | "manage" | "projects">("create");
   const [searchProjectId, setSearchProjectId] = useState("");
   const [fetchedProject, setFetchedProject] = useState<SplitProject | null>(
     null,
@@ -61,6 +70,11 @@ export function SplitApp() {
   const [showDistributeModal, setShowDistributeModal] = useState(false);
   const [history, setHistory] = useState<ProjectHistoryItem[]>([]);
   const [isLoadingHistory, setIsLoadingHistory] = useState(false);
+
+  // Phase 3: Projects tab state
+  const [projectsList, setProjectsList] = useState<SplitProject[]>([]);
+  const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
+  const [isLoadingProjectsList, setIsLoadingProjectsList] = useState(false);
 
   const totalBasisPoints = useMemo(
     () =>
@@ -163,7 +177,7 @@ export function SplitApp() {
   function addCollaborator() {
     setCollaborators((prev) => [
       ...prev,
-      { id: crypto.randomUUID(), address: "", alias: "", basisPoints: "0" },
+      { id: `collab-${Date.now()}-${prev.length}`, address: "", alias: "", basisPoints: "0" },
     ]);
   }
 
@@ -311,6 +325,38 @@ export function SplitApp() {
     }
   };
 
+  // Phase 3: Fetch projects list from seeded IDs
+  const onFetchProjectsList = async () => {
+    setIsLoadingProjectsList(true);
+    try {
+      const projects: SplitProject[] = [];
+      for (const projectId of SEEDED_PROJECT_IDS) {
+        try {
+          const project = await getSplit(projectId);
+          projects.push(project);
+        } catch (error) {
+          console.error(`Failed to fetch project ${projectId}:`, error);
+        }
+      }
+      setProjectsList(projects);
+      if (projects.length === 0) {
+        showToast("No projects found.", "info");
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to fetch projects list.";
+      showToast(message, "error");
+    } finally {
+      setIsLoadingProjectsList(false);
+    }
+  };
+
+  // Load projects list when switching to Projects tab
+  useEffect(() => {
+    if (activeTab === "projects" && projectsList.length === 0 && !isLoadingProjectsList) {
+      void onFetchProjectsList();
+    }
+  }, [activeTab]);
+
   return (
     <main className="min-h-screen px-6 py-12 md:px-12 selection:bg-greenBright/10 selection:text-greenBright">
       <div className="mx-auto flex w-full max-w-4xl flex-col gap-10">
@@ -399,13 +445,19 @@ export function SplitApp() {
           >
             Manage & Distribute
           </button>
+          <button
+            onClick={() => setActiveTab("projects")}
+            className={clsx(
+              "rounded-full px-8 py-2.5 text-xs font-bold uppercase tracking-widest transition-all",
+              activeTab === "projects" ? "bg-white/10 text-ink shadow-sm" : "text-muted hover:text-ink/80"
+            )}
+          >
+            Projects
+          </button>
         </div>
 
         {activeTab === "create" ? (
-          <form
-            onSubmit={onSubmit}
-            className="glass-card rounded-[2.5rem] p-8 md:p-10"
-          >
+          <form onSubmit={onSubmit} className="glass-card rounded-[2.5rem] p-8 md:p-10 space-y-12">
             <div className="flex items-center justify-between border-b border-white/5 pb-6">
               <h2 className="font-display text-2xl tracking-tight">
                 Project Setup
@@ -840,7 +892,8 @@ export function SplitApp() {
               </div>
             )}
           </form>
-        ) : (
+        ) : activeTab === "manage" ? (
+          /* Manage Tab Content */
           <div className="space-y-10">
             <div className="glass-card rounded-[2.5rem] p-8 md:p-10">
               <h2 className="font-display text-2xl tracking-tight mb-8">
@@ -1091,6 +1144,216 @@ export function SplitApp() {
                 </div>
               </div>
             )}
+          </div>
+        ) : (
+          /* Projects Tab Content */
+          <div className="space-y-10">
+            {/* Projects List View */}
+            {selectedProjectId === null ? (
+              <div className="space-y-8">
+                <div className="glass-card rounded-[2.5rem] p-8 md:p-10">
+                  <h2 className="font-display text-2xl tracking-tight mb-2">Available Projects</h2>
+                  <p className="text-muted text-sm mb-6">Browse and manage existing split projects</p>
+                  <button
+                    onClick={onFetchProjectsList}
+                    disabled={isLoadingProjectsList}
+                    className="premium-button rounded-2xl bg-greenMid px-8 py-4 text-xs font-bold uppercase tracking-widest text-white disabled:opacity-20"
+                  >
+                    {isLoadingProjectsList ? (
+                      <div className="flex items-center gap-3">
+                        <svg className="h-4 w-4 animate-spin" viewBox="0 0 24 24">
+                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
+                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                        </svg>
+                        Loading Projects...
+                      </div>
+                    ) : (
+                      "Refresh Projects"
+                    )}
+                  </button>
+                </div>
+
+                {projectsList.length > 0 ? (
+                  <div className="grid gap-6 md:grid-cols-2">
+                    {projectsList.map((project) => (
+                      <button
+                        key={project.projectId}
+                        onClick={() => {
+                          setSelectedProjectId(project.projectId);
+                          setFetchedProject(project);
+                          void fetchHistory(project.projectId);
+                        }}
+                        className="glass-card rounded-[2.5rem] p-8 text-left hover:bg-white/5 transition-all animate-in fade-in zoom-in-95 duration-500"
+                      >
+                        <div className="flex items-start justify-between gap-4 mb-4">
+                          <div className="space-y-2 flex-1">
+                            <h3 className="font-display text-xl tracking-tight">{project.title}</h3>
+                            <p className="font-mono text-[10px] text-muted opacity-60 break-all">{project.projectId}</p>
+                          </div>
+                          <span className="rounded-full bg-white/5 px-3 py-1 text-[10px] font-bold uppercase tracking-widest text-muted border border-white/5">
+                            {project.projectType}
+                          </span>
+                        </div>
+                        <div className="grid grid-cols-2 gap-4 pt-4 border-t border-white/5">
+                          <div className="space-y-1">
+                            <p className="text-[10px] font-bold uppercase tracking-[0.2em] text-muted">Collaborators</p>
+                            <p className="text-2xl font-display">{project.collaborators.length}</p>
+                          </div>
+                          <div className="text-right space-y-1">
+                            <p className="text-[10px] font-bold uppercase tracking-[0.2em] text-muted">Available</p>
+                            <p className="text-2xl font-display text-greenBright">{Number(project.balance).toLocaleString()}</p>
+                          </div>
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="glass-card rounded-[2.5rem] p-12 text-center">
+                    <p className="text-muted text-sm font-medium">
+                      {isLoadingProjectsList ? "Loading projects..." : "No projects loaded yet. Click Refresh Projects to load."}
+                    </p>
+                  </div>
+                )}
+              </div>
+            ) : fetchedProject ? (
+              /* Projects Detail View */
+              <div className="space-y-8">
+                <button
+                  onClick={() => {
+                    setSelectedProjectId(null);
+                    setFetchedProject(null);
+                  }}
+                  className="premium-button flex items-center gap-2 rounded-2xl bg-white/5 px-6 py-3 text-sm font-bold uppercase tracking-widest text-muted hover:text-ink hover:bg-white/10 transition-all"
+                >
+                  <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M15 19l-7-7 7-7" />
+                  </svg>
+                  Back to Projects
+                </button>
+
+                <div className="glass-card rounded-[2.5rem] p-8 md:p-10 animate-in fade-in zoom-in-95 duration-500">
+                  <div className="flex flex-wrap items-center justify-between gap-6 border-b border-white/5 pb-8">
+                    <div className="space-y-1">
+                      <div className="flex items-center gap-3">
+                        <h2 className="font-display text-3xl tracking-tight">{fetchedProject.title}</h2>
+                        <span className="rounded-full bg-white/5 px-3 py-1 text-[10px] font-bold uppercase tracking-widest text-muted border border-white/5">
+                          {fetchedProject.projectType}
+                        </span>
+                      </div>
+                      <p className="font-mono text-xs text-muted opacity-60 break-all">{fetchedProject.projectId}</p>
+                    </div>
+                    <div className="text-right space-y-1">
+                      <p className="text-[10px] font-bold uppercase tracking-[0.2em] text-muted">Available Funds</p>
+                      <p className="text-4xl font-display text-greenBright">{Number(fetchedProject.balance).toLocaleString()} <span className="text-sm font-sans opacity-40">Stroops</span></p>
+                    </div>
+                  </div>
+
+                  <div className="mt-10 grid gap-10 md:grid-cols-2">
+                    <div className="space-y-6">
+                      <h3 className="text-xs font-bold uppercase tracking-[0.2em] text-muted border-l-2 border-greenBright pl-4">Distribution Rules</h3>
+                      <div className="space-y-3">
+                        {fetchedProject.collaborators.map((collab, idx) => (
+                          <div key={idx} className="flex justify-between items-center rounded-2xl bg-white/2 p-4 text-sm border border-white/5 hover:bg-white/4 transition-colors">
+                            <div className="space-y-0.5">
+                              <p className="font-bold">{collab.alias}</p>
+                              <p className="font-mono text-[10px] text-muted opacity-60 truncate max-w-[150px]">{collab.address}</p>
+                            </div>
+                            <span className="font-mono font-bold text-greenBright/80">{(collab.basisPoints / 100).toFixed(2)}%</span>
+                          </div>
+                        ))}
+                      </div>
+
+                      <div className="pt-6 border-t border-white/5">
+                        <h3 className="text-xs font-bold uppercase tracking-[0.2em] text-muted mb-6">Internal Ledgers</h3>
+                        <div className="grid grid-cols-2 gap-4">
+                          <div className="rounded-2xl border border-white/5 bg-white/2 p-4 space-y-1">
+                            <p className="text-[10px] font-bold uppercase tracking-widest text-muted">Rounds</p>
+                            <p className="text-xl font-display">{fetchedProject.distributionRound}</p>
+                          </div>
+                          <div className="rounded-2xl border border-white/5 bg-white/2 p-4 space-y-1 text-right">
+                            <p className="text-[10px] font-bold uppercase tracking-widest text-muted">Total Paid</p>
+                            <p className="text-xl font-display">{Number(fetchedProject.totalDistributed).toLocaleString()}</p>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="space-y-6">
+                      <h3 className="text-xs font-bold uppercase tracking-[0.2em] text-muted border-l-2 border-greenBright pl-4">Transparency History</h3>
+                      <div className="relative space-y-4 before:absolute before:left-[19px] before:top-2 before:h-[calc(100%-16px)] before:w-px before:bg-white/10 max-h-[500px] overflow-y-auto pr-2 custom-scrollbar">
+                        {isLoadingHistory ? (
+                          <div className="flex items-center gap-3 pl-10 text-[10px] font-bold uppercase tracking-widest text-muted">
+                            <svg className="h-3 w-3 animate-spin" viewBox="0 0 24 24">
+                              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
+                              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                            </svg>
+                            Syncing on-chain events...
+                          </div>
+                        ) : history.length > 0 ? (
+                          history.map((item) => (
+                            <div key={item.id} className="relative pl-10 group">
+                              <div className={clsx(
+                                "absolute left-0 top-1 flex h-10 w-10 items-center justify-center rounded-full border border-white/10 bg-[#0a0a09] transition-all group-hover:border-greenBright/30",
+                                item.type === "round" ? "text-greenBright" : "text-ink/60"
+                              )}>
+                                {item.type === "round" ? (
+                                  <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4" />
+                                  </svg>
+                                ) : (
+                                  <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
+                                  </svg>
+                                )}
+                              </div>
+                              <div className="flex flex-col gap-0.5">
+                                <div className="flex items-center justify-between">
+                                  <p className="text-xs font-bold text-ink">
+                                    {item.type === "round" ? `Distribution Round #${item.round}` : "Recipient Payout"}
+                                  </p>
+                                  <span className="text-[10px] font-mono text-muted tabular-nums opacity-60">
+                                    {new Date(item.ledgerCloseTime * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                                  </span>
+                                </div>
+                                <p className="text-[10px] font-medium text-muted uppercase tracking-tighter">
+                                  {item.type === "round" ? (
+                                    <>Total: <span className="text-ink">{Number(item.amount).toLocaleString()}</span> Stroops</>
+                                  ) : (
+                                    <>To: <span className="text-ink font-mono">{item.recipient.slice(0, 8)}...</span> Amount: <span className="text-ink">{Number(item.amount).toLocaleString()}</span></>
+                                  )}
+                                </p>
+                                <a
+                                  href={`https://stellar.expert/explorer/testnet/tx/${item.txHash}`}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="text-[9px] font-bold text-greenBright/40 hover:text-greenBright transition-colors uppercase tracking-widest mt-1"
+                                >
+                                  Verify Transaction →
+                                </a>
+                              </div>
+                            </div>
+                          ))
+                        ) : (
+                          <div className="pl-10 text-[10px] font-bold uppercase tracking-widest text-muted opacity-40 italic">
+                            No verified history found for this project
+                          </div>
+                        )}
+                      </div>
+
+                      <button
+                        onClick={() => setShowDistributeModal(true)}
+                        disabled={Number(fetchedProject.balance) <= 0 || !wallet.connected}
+                        className="premium-button w-full rounded-2xl bg-greenBright py-6 text-xs font-black uppercase tracking-[0.3em] text-[#0a0a09] shadow-xl shadow-greenBright/10 disabled:opacity-10 disabled:bg-white"
+                      >
+                        Trigger Distribution
+                      </button>
+                      {!wallet.connected && <p className="text-center text-[10px] font-bold text-red-500 uppercase tracking-widest">Connect wallet to distribute</p>}
+                      {Number(fetchedProject.balance) <= 0 && <p className="text-center text-[10px] font-bold text-muted uppercase tracking-widest">No funds available to distribute</p>}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            ) : null}
           </div>
         )}
       </div>
