@@ -80,7 +80,8 @@ pub enum DataKey {
     AllowedTokenCount,
     /// Allowlisted token contract address marker
     AllowedToken(Address),
-}
+    /// Global flag to pause all distributions (emergency stop)
+    DistributionsPaused,
 
 /// Returned by `get_claimable`: how much a collaborator has received and the
 /// last distribution round the project has completed.
@@ -122,6 +123,24 @@ impl SplitNairaContract {
         }
 
         env.storage().persistent().set(&DataKey::Admin, &admin);
+        Ok(())
+    }
+
+    /// Pauses all distributions (emergency stop). Only contract admin can call.
+    pub fn pause_distributions(env: Env, admin: Address) -> Result<(), SplitError> {
+        Self::require_contract_admin(&env, &admin)?;
+        admin.require_auth();
+
+        env.storage().persistent().set(&DataKey::DistributionsPaused, &true);
+        Ok(())
+    }
+
+    /// Unpauses distributions. Only contract admin can call.
+    pub fn unpause_distributions(env: Env, admin: Address) -> Result<(), SplitError> {
+        Self::require_contract_admin(&env, &admin)?;
+        admin.require_auth();
+
+        env.storage().persistent().set(&DataKey::DistributionsPaused, &false);
         Ok(())
     }
 
@@ -386,6 +405,16 @@ impl SplitNairaContract {
     pub fn distribute(env: Env, project_id: Symbol) -> Result<(), SplitError> {
         let mut project = Self::get_project_or_err(&env, &project_id)?;
 
+        // Check if distributions are paused
+        let paused: bool = env
+            .storage()
+            .persistent()
+            .get::<DataKey, bool>(&DataKey::DistributionsPaused)
+            .unwrap_or(false);
+        if paused {
+            return Err(SplitError::DistributionsPaused);
+        }
+
         // Read project-scoped distributable balance.
         let balance: i128 = env
             .storage()
@@ -591,7 +620,13 @@ impl SplitNairaContract {
             .persistent()
             .has(&DataKey::AllowedToken(token))
     }
-
+    /// Returns true if distributions are currently paused.
+    pub fn is_distributions_paused(env: Env) -> bool {
+        env.storage()
+            .persistent()
+            .get::<DataKey, bool>(&DataKey::DistributionsPaused)
+            .unwrap_or(false)
+    }
     /// Returns the number of allowlisted token addresses.
     pub fn get_allowed_token_count(env: Env) -> u32 {
         env.storage()
