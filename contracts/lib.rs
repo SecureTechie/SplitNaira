@@ -78,6 +78,8 @@ pub enum DataKey {
     Admin,
     /// Number of allowlisted token contract addresses
     AllowedTokenCount,
+    /// Ordered list of allowlisted token contract addresses
+    AllowedTokenList,
     /// Allowlisted token contract address marker
     AllowedToken(Address),
     /// Global flag to pause all distributions (emergency stop)
@@ -149,10 +151,20 @@ impl SplitNairaContract {
     pub fn allow_token(env: Env, admin: Address, token: Address) -> Result<(), SplitError> {
         Self::require_contract_admin(&env, &admin)?;
 
-        let key = DataKey::AllowedToken(token);
+        let key = DataKey::AllowedToken(token.clone());
         let is_already_allowed = env.storage().persistent().has(&key);
         if !is_already_allowed {
             env.storage().persistent().set(&key, &true);
+
+            let mut allowed_tokens: Vec<Address> = env
+                .storage()
+                .persistent()
+                .get::<DataKey, Vec<Address>>(&DataKey::AllowedTokenList)
+                .unwrap_or(Vec::new(&env));
+            allowed_tokens.push_back(token);
+            env.storage()
+                .persistent()
+                .set(&DataKey::AllowedTokenList, &allowed_tokens);
 
             let count: u32 = env
                 .storage()
@@ -171,10 +183,25 @@ impl SplitNairaContract {
     pub fn disallow_token(env: Env, admin: Address, token: Address) -> Result<(), SplitError> {
         Self::require_contract_admin(&env, &admin)?;
 
-        let key = DataKey::AllowedToken(token);
+        let key = DataKey::AllowedToken(token.clone());
         let was_allowed = env.storage().persistent().has(&key);
         if was_allowed {
             env.storage().persistent().remove(&key);
+
+            let allowed_tokens: Vec<Address> = env
+                .storage()
+                .persistent()
+                .get::<DataKey, Vec<Address>>(&DataKey::AllowedTokenList)
+                .unwrap_or(Vec::new(&env));
+            let mut filtered_tokens = Vec::new(&env);
+            for allowed_token in allowed_tokens.iter() {
+                if allowed_token != token {
+                    filtered_tokens.push_back(allowed_token);
+                }
+            }
+            env.storage()
+                .persistent()
+                .set(&DataKey::AllowedTokenList, &filtered_tokens);
 
             let count: u32 = env
                 .storage()
@@ -628,6 +655,30 @@ impl SplitNairaContract {
             .persistent()
             .get::<DataKey, u32>(&DataKey::AllowedTokenCount)
             .unwrap_or(0)
+    }
+
+    /// Returns a paginated list of allowlisted token addresses.
+    pub fn get_allowed_tokens(env: Env, start: u32, limit: u32) -> Vec<Address> {
+        let allowed_tokens: Vec<Address> = env
+            .storage()
+            .persistent()
+            .get::<DataKey, Vec<Address>>(&DataKey::AllowedTokenList)
+            .unwrap_or(Vec::new(&env));
+
+        let total = allowed_tokens.len();
+        if start >= total {
+            return Vec::new(&env);
+        }
+
+        let end = (start + limit).min(total);
+        let mut result = Vec::new(&env);
+        for i in start..end {
+            if let Some(token) = allowed_tokens.get(i) {
+                result.push_back(token);
+            }
+        }
+
+        result
     }
 
     /// Returns the configured contract admin, if set.

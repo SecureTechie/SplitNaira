@@ -367,6 +367,40 @@ fn test_allowlist_turns_off_after_last_token_is_removed() {
     assert_eq!(client.get_project_count(), 1);
 }
 
+#[test]
+fn test_get_allowed_tokens_returns_paginated_allowlist() {
+    let (env, _admin, token_a) = create_test_env();
+    let token_b_admin = Address::generate(&env);
+    let token_b = env.register_stellar_asset_contract(token_b_admin);
+    let token_c_admin = Address::generate(&env);
+    let token_c = env.register_stellar_asset_contract(token_c_admin);
+
+    let contract_id = env.register_contract(None, SplitNairaContract);
+    let client = SplitNairaContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    client.set_admin(&admin);
+    client.allow_token(&admin, &token_a);
+    client.allow_token(&admin, &token_b);
+    client.allow_token(&admin, &token_c);
+
+    assert_eq!(
+        client.get_allowed_tokens(&0, &10),
+        Vec::from_slice(&env, &[token_a.clone(), token_b.clone(), token_c.clone()])
+    );
+    assert_eq!(
+        client.get_allowed_tokens(&1, &1),
+        Vec::from_slice(&env, &[token_b.clone()])
+    );
+
+    client.disallow_token(&admin, &token_b);
+
+    assert_eq!(
+        client.get_allowed_tokens(&0, &10),
+        Vec::from_slice(&env, &[token_a, token_c])
+    );
+}
+
 // ============================================================
 //  UPDATE + LOCK TESTS
 // ============================================================

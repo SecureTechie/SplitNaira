@@ -217,6 +217,43 @@ describe("splits routes integration", () => {
     expect(getAccountMock).toHaveBeenCalledWith("GTESTSIMULATOR");
   });
 
+  it("reads admin allowlist state", async () => {
+    getAccountMock.mockResolvedValue({ accountId: "GSIM" });
+    simulateTransactionMock
+      .mockResolvedValueOnce({
+        result: {
+          retval: "GADMIN"
+        }
+      })
+      .mockResolvedValueOnce({
+        result: {
+          retval: 2
+        }
+      })
+      .mockResolvedValueOnce({
+        result: {
+          retval: ["GTOKEN_1", "GTOKEN_2"]
+        }
+      });
+
+    const app = createApp();
+
+    const response = await request(app)
+      .get("/splits/admin/allowlist?start=0&limit=25")
+      .expect(200);
+
+    expect(response.body).toEqual({
+      admin: "GADMIN",
+      allowedTokenCount: 2,
+      tokens: ["GTOKEN_1", "GTOKEN_2"],
+      start: 0,
+      limit: 25
+    });
+
+    expect(getAccountMock).toHaveBeenCalledWith("GTESTSIMULATOR");
+    expect(simulateTransactionMock).toHaveBeenCalledTimes(3);
+  });
+
   it("builds allow_token transaction", async () => {
     getAccountMock.mockResolvedValue({ accountId: "GADMIN" });
     prepareTransactionMock.mockResolvedValue({
@@ -352,24 +389,27 @@ describe("splits routes integration", () => {
 
     const response = await request(app).get("/splits/project_1/history").expect(200);
 
-    expect(response.body).toEqual([
-      {
-        type: "round",
-        round: 2,
-        amount: "100",
-        txHash: "TX2",
-        ledgerCloseTime: "2025-01-02T00:00:00Z",
-        id: "round-2"
-      },
-      {
-        type: "payment",
-        recipient: "GUSER",
-        amount: "50",
-        txHash: "TX1",
-        ledgerCloseTime: "2025-01-01T00:00:00Z",
-        id: "payment-1"
-      }
-    ]);
+    expect(response.body).toEqual({
+      items: [
+        {
+          type: "round",
+          round: 2,
+          amount: "100",
+          txHash: "TX2",
+          ledgerCloseTime: "2025-01-02T00:00:00Z",
+          id: "round-2"
+        },
+        {
+          type: "payment",
+          recipient: "GUSER",
+          amount: "50",
+          txHash: "TX1",
+          ledgerCloseTime: "2025-01-01T00:00:00Z",
+          id: "payment-1"
+        }
+      ],
+      nextCursor: null
+    });
 
     expect(getEventsMock).toHaveBeenCalledTimes(2);
   });

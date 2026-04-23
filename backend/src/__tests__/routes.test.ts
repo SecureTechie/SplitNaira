@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import request from "supertest";
 import { app } from "../index.js";
 
@@ -14,11 +14,15 @@ vi.mock("../services/stellar.js", () => {
       horizonUrl: "http://horizon",
       sorobanRpcUrl: "http://rpc",
       networkPassphrase: "test",
-      contractId: "test_contract",
+      contractId: "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABSC4",
       simulatorAccount: "test_account"
     })),
     getStellarRpcServer: vi.fn(() => ({
-      getAccount: vi.fn().mockResolvedValue({}),
+      getAccount: vi.fn().mockResolvedValue({
+        accountId: () => "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
+        sequenceNumber: () => "1",
+        incrementSequenceNumber: vi.fn()
+      }),
       simulateTransaction: vi.fn().mockResolvedValue({ result: { retval: null } }),
       prepareTransaction: vi.fn().mockResolvedValue({
         toXDR: () => "test_xdr",
@@ -44,7 +48,7 @@ describe("Route Integration Tests", () => {
     it("should return 200 and healthy status", async () => {
       const res = await request(app).get("/health");
       expect(res.status).toBe(200);
-      expect(res.body.status).toBe("healthy");
+      expect(res.body.status).toBe("ok");
     });
   });
 

@@ -1,3 +1,5 @@
+import { readFile, writeFile } from "node:fs/promises";
+
 export interface PayoutRecord {
   id: string;
   roundId: string;
@@ -35,13 +37,13 @@ export interface PayoutIndexConfig {
 
 export function createPayoutHistoryService(config?: Partial<PayoutIndexConfig>): PayoutHistoryIndex {
   const storageFile = config?.storageFile || './data/payout-history.json';
-  const reindexIntervalMs = config?.reindexInterval || 3600000;
+  const _reindexIntervalMs = config?.reindexInterval || 3600000;
 
   let cache: Map<string, PayoutRecord> = new Map();
 
   async function loadFromStorage(): Promise<void> {
     try {
-      const data = await Bun.file(storageFile).text();
+      const data = await readFile(storageFile, "utf8");
       const records: PayoutRecord[] = JSON.parse(data);
       for (const record of records) {
         cache.set(record.id, record);
@@ -53,7 +55,7 @@ export function createPayoutHistoryService(config?: Partial<PayoutIndexConfig>):
 
   async function saveToStorage(): Promise<void> {
     const records = Array.from(cache.values());
-    await Bun.write(storageFile, JSON.stringify(records, null, 2));
+    await writeFile(storageFile, JSON.stringify(records, null, 2), "utf8");
   }
 
   return {

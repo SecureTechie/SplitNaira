@@ -5,7 +5,9 @@ import { rpc, Transaction, StrKey } from "@stellar/stellar-sdk";
 import { clsx } from "clsx";
 
 import {
+  buildAllowTokenXdr,
   buildCreateSplitXdr,
+  buildDisallowTokenXdr,
   buildDepositXdr,
   buildDistributeXdr,
   buildLockProjectXdr,
@@ -14,6 +16,8 @@ import {
   getProjectHistory,
   getSplit,
   type ProjectHistoryItem,
+  getTokenAllowlist,
+  type TokenAllowlistState,
 } from "@/lib/api";
 import { isOwner } from "@/lib/address";
 import {
@@ -31,6 +35,12 @@ interface CollaboratorInput {
   address: string;
   alias: string;
   basisPoints: string;
+}
+
+interface AllowlistActionResult {
+  action: "allow" | "disallow";
+  token: string;
+  txHash: string | null;
 }
 
 // Use static IDs instead of random UUIDs to avoid hydration mismatches
@@ -94,6 +104,11 @@ export function SplitApp() {
   const [dashboardData, setDashboardData] = useState<SplitProject[]>([]);
   const [userEarnings, setUserEarnings] = useState<Record<string, string>>({});
   const [isLoadingDashboard, setIsLoadingDashboard] = useState(false);
+  const [tokenAllowlist, setTokenAllowlist] = useState<TokenAllowlistState | null>(null);
+  const [allowlistTokenInput, setAllowlistTokenInput] = useState("");
+  const [isLoadingAllowlist, setIsLoadingAllowlist] = useState(true);
+  const [isUpdatingAllowlist, setIsUpdatingAllowlist] = useState(false);
+  const [lastAllowlistTx, setLastAllowlistTx] = useState<AllowlistActionResult | null>(null);
 
   const totalBasisPoints = useMemo(
     () =>
@@ -161,12 +176,48 @@ export function SplitApp() {
     [totalBasisPoints, validationErrors, collaborators.length]
   );
 
+  const normalizedAllowlistToken = allowlistTokenInput.trim();
+  const isValidAllowlistToken = useMemo(
+    () =>
+      normalizedAllowlistToken.length > 0 &&
+      (StrKey.isValidEd25519PublicKey(normalizedAllowlistToken) ||
+        StrKey.isValidContract(normalizedAllowlistToken)),
+    [normalizedAllowlistToken]
+  );
+
+  const isContractAdmin = tokenAllowlist?.admin
+    ? isOwner(tokenAllowlist.admin, wallet.address)
+    : false;
+
   useEffect(() => {
     void getFreighterWalletState()
       .then(setWallet)
       .catch(() => {
         setWallet({ connected: false, address: null, network: null });
       });
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    void getTokenAllowlist()
+      .then((state) => {
+        if (!cancelled) {
+          setTokenAllowlist(state);
+        }
+      })
+      .catch((error) => {
+        console.error("Failed to fetch token allowlist:", error);
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setIsLoadingAllowlist(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   async function onConnectWallet() {
@@ -632,6 +683,82 @@ export function SplitApp() {
     }
   };
 
+  const refreshTokenAllowlist = async () => {
+    setIsLoadingAllowlist(true);
+    try {
+      const state = await getTokenAllowlist();
+      setTokenAllowlist(state);
+      return state;
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "Failed to refresh token allowlist.";
+      showToast(message, "error");
+      return null;
+    } finally {
+      setIsLoadingAllowlist(false);
+    }
+  };
+
+  const onSubmitAllowlistAction = async (action: "allow" | "disallow") => {
+    if (!wallet.address || !isContractAdmin) {
+      showToast("Only the configured contract admin can manage the allowlist.", "error");
+      return;
+    }
+
+    if (!isValidAllowlistToken) {
+      showToast("Enter a valid Stellar account or contract address.", "error");
+      return;
+    }
+
+    setIsUpdatingAllowlist(true);
+    setLastAllowlistTx(null);
+    try {
+      const buildResponse =
+        action === "allow"
+          ? await buildAllowTokenXdr(wallet.address, normalizedAllowlistToken)
+          : await buildDisallowTokenXdr(wallet.address, normalizedAllowlistToken);
+      const signedTxXdr = await signWithFreighter(
+        buildResponse.xdr,
+        buildResponse.metadata.networkPassphrase
+      );
+      const server = new rpc.Server(
+        process.env.NEXT_PUBLIC_SOROBAN_RPC_URL ?? "https://soroban-testnet.stellar.org",
+        { allowHttp: true }
+      );
+      const transaction = new Transaction(
+        signedTxXdr,
+        buildResponse.metadata.networkPassphrase
+      );
+      const submitResponse = await server.sendTransaction(transaction);
+      if (submitResponse.status === "ERROR") {
+        throw new Error(
+          submitResponse.errorResult?.toString() ??
+            "Token allowlist transaction failed."
+        );
+      }
+
+      setLastAllowlistTx({
+        action,
+        token: normalizedAllowlistToken,
+        txHash: submitResponse.hash ?? null
+      });
+      setAllowlistTokenInput("");
+      showToast(
+        action === "allow"
+          ? "Token added to the allowlist."
+          : "Token removed from the allowlist.",
+        "success"
+      );
+      await refreshTokenAllowlist();
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "Failed to update token allowlist.";
+      showToast(message, "error");
+    } finally {
+      setIsUpdatingAllowlist(false);
+    }
+  };
+
   // Load projects list when switching to Projects tab
   useEffect(() => {
     if (activeTab === "projects" && projectsList.length === 0 && !isLoadingProjectsList) {
@@ -773,6 +900,189 @@ export function SplitApp() {
                 </p>
               </div>
             </div>
+
+            {wallet.connected && isContractAdmin && tokenAllowlist && (
+              <div className="glass-card rounded-[2.5rem] p-8 md:p-10 border border-greenBright/10">
+                <div className="flex flex-wrap items-start justify-between gap-6">
+                  <div className="space-y-1">
+                    <p className="text-[10px] font-bold uppercase tracking-[0.2em] text-greenBright/80">
+                      Admin Control Plane
+                    </p>
+                    <h2 className="font-display text-2xl tracking-tight">
+                      Admin Token Allowlist
+                    </h2>
+                    <p className="max-w-2xl text-sm text-muted">
+                      Inspect the live allowlist and submit contract-backed allow or disallow actions from the connected admin wallet.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      void refreshTokenAllowlist();
+                    }}
+                    disabled={isLoadingAllowlist || isUpdatingAllowlist}
+                    className="premium-button rounded-2xl border border-white/10 bg-white/5 px-5 py-3 text-[10px] font-bold uppercase tracking-widest text-muted hover:text-ink disabled:opacity-40"
+                  >
+                    {isLoadingAllowlist ? "Refreshing..." : "Refresh State"}
+                  </button>
+                </div>
+
+                <div className="mt-8 grid gap-4 md:grid-cols-3">
+                  <div className="rounded-3xl border border-white/5 bg-white/2 p-5">
+                    <p className="text-[10px] font-bold uppercase tracking-[0.2em] text-muted">
+                      Contract Admin
+                    </p>
+                    <p className="mt-3 break-all font-mono text-xs text-ink">
+                      {tokenAllowlist.admin}
+                    </p>
+                  </div>
+                  <div className="rounded-3xl border border-white/5 bg-white/2 p-5">
+                    <p className="text-[10px] font-bold uppercase tracking-[0.2em] text-muted">
+                      Allowlist Mode
+                    </p>
+                    <p className="mt-3 text-2xl font-display text-greenBright">
+                      {tokenAllowlist.allowedTokenCount > 0 ? "Active" : "Open"}
+                    </p>
+                    <p className="mt-1 text-xs text-muted">
+                      {tokenAllowlist.allowedTokenCount > 0
+                        ? "New splits are restricted to the listed token addresses."
+                        : "No tokens are listed, so any token address can be used."}
+                    </p>
+                  </div>
+                  <div className="rounded-3xl border border-white/5 bg-white/2 p-5">
+                    <p className="text-[10px] font-bold uppercase tracking-[0.2em] text-muted">
+                      Listed Tokens
+                    </p>
+                    <p className="mt-3 text-2xl font-display">
+                      {tokenAllowlist.allowedTokenCount}
+                    </p>
+                    <p className="mt-1 text-xs text-muted">
+                      Current page contains {tokenAllowlist.tokens.length} token address{tokenAllowlist.tokens.length === 1 ? "" : "es"}.
+                    </p>
+                  </div>
+                </div>
+
+                <div className="mt-8 rounded-[2rem] border border-white/5 bg-white/2 p-6">
+                  <div className="grid gap-4 md:grid-cols-[minmax(0,1fr)_auto_auto]">
+                    <div className="space-y-2">
+                      <label
+                        htmlFor="allowlist-token-input"
+                        className="text-[10px] font-bold uppercase tracking-[0.2em] text-muted"
+                      >
+                        Token Contract Address
+                      </label>
+                      <input
+                        id="allowlist-token-input"
+                        value={allowlistTokenInput}
+                        onChange={(event) => setAllowlistTokenInput(event.target.value)}
+                        placeholder="Enter token address to allow or disallow"
+                        disabled={isUpdatingAllowlist}
+                        className={clsx(
+                          "glass-input w-full rounded-2xl px-5 py-4 text-sm",
+                          normalizedAllowlistToken && !isValidAllowlistToken
+                            ? "border-red-500/50 bg-red-500/5"
+                            : ""
+                        )}
+                      />
+                      {normalizedAllowlistToken && !isValidAllowlistToken && (
+                        <p className="text-[10px] font-bold uppercase tracking-widest text-red-400">
+                          Enter a valid Stellar account or contract address.
+                        </p>
+                      )}
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        void onSubmitAllowlistAction("allow");
+                      }}
+                      disabled={isUpdatingAllowlist || !isValidAllowlistToken}
+                      className="premium-button self-end rounded-2xl bg-greenBright px-6 py-4 text-[10px] font-black uppercase tracking-[0.3em] text-[#0a0a09] disabled:opacity-30"
+                    >
+                      {isUpdatingAllowlist ? "Submitting..." : "Allow Token"}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        void onSubmitAllowlistAction("disallow");
+                      }}
+                      disabled={isUpdatingAllowlist || !isValidAllowlistToken}
+                      className="premium-button self-end rounded-2xl border border-red-400/30 bg-red-500/10 px-6 py-4 text-[10px] font-black uppercase tracking-[0.3em] text-red-300 disabled:opacity-30"
+                    >
+                      {isUpdatingAllowlist ? "Submitting..." : "Disallow Token"}
+                    </button>
+                  </div>
+                </div>
+
+                {lastAllowlistTx && (
+                  <div className="mt-6 rounded-2xl border border-greenBright/20 bg-greenBright/5 p-5">
+                    <div className="flex items-start gap-4">
+                      <div className="mt-0.5 flex h-8 w-8 items-center justify-center rounded-full bg-greenBright/10">
+                        <svg className="h-5 w-5 text-greenBright" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                        </svg>
+                      </div>
+                      <div className="space-y-1">
+                        <h3 className="text-xs font-bold uppercase tracking-widest text-greenBright">
+                          {lastAllowlistTx.action === "allow" ? "Allowlist updated" : "Allowlist removal confirmed"}
+                        </h3>
+                        <p className="text-sm text-muted">
+                          {lastAllowlistTx.action === "allow" ? "Allowed" : "Disallowed"} token{" "}
+                          <span className="font-mono text-ink">{lastAllowlistTx.token}</span>.
+                        </p>
+                        {lastAllowlistTx.txHash && (
+                          <>
+                            <p className="font-mono text-[10px] text-muted break-all opacity-80">
+                              Tx: {lastAllowlistTx.txHash}
+                            </p>
+                            <a
+                              href={`https://stellar.expert/explorer/testnet/tx/${lastAllowlistTx.txHash}`}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="inline-block pt-1 text-[10px] font-bold text-greenBright underline underline-offset-4 hover:text-white"
+                            >
+                              View on Explorer →
+                            </a>
+                          </>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                <div className="mt-8 space-y-4">
+                  <div className="flex items-center justify-between">
+                    <h3 className="text-xs font-bold uppercase tracking-[0.2em] text-muted">
+                      Current Allowed Tokens
+                    </h3>
+                    <span className="rounded-full bg-white/5 px-3 py-1 text-[10px] font-bold uppercase tracking-widest text-muted">
+                      {tokenAllowlist.allowedTokenCount} total
+                    </span>
+                  </div>
+
+                  {tokenAllowlist.tokens.length > 0 ? (
+                    <div className="space-y-3">
+                      {tokenAllowlist.tokens.map((allowedToken) => (
+                        <div
+                          key={allowedToken}
+                          className="rounded-2xl border border-white/5 bg-white/2 px-5 py-4"
+                        >
+                          <p className="text-[10px] font-bold uppercase tracking-widest text-greenBright/70">
+                            Allowed Token
+                          </p>
+                          <p className="mt-2 break-all font-mono text-xs text-ink">
+                            {allowedToken}
+                          </p>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="rounded-2xl border border-dashed border-white/10 bg-white/2 px-5 py-6 text-sm text-muted">
+                      No token addresses are allowlisted yet. The contract currently accepts any token address for new splits.
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
 
             {/* User Earnings Section */}
             {wallet.connected && (
