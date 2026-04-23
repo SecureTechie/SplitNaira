@@ -9,6 +9,7 @@ import { healthRouter } from "./routes/health.js";
 import { splitsRouter } from "./routes/splits.js";
 import { errorHandler, notFoundHandler } from "./middleware/error.js";
 import { requestIdMiddleware } from "./middleware/request-id.js";
+import { validateEnv, printEnvDiagnostics } from "./config/env.js";
 
 dotenv.config();
 
@@ -77,6 +78,11 @@ if (process.env.NODE_ENV !== "test") {
   // Startup wrapper to allow clean fatal handling
   const start = async () => {
     try {
+      if (process.env.NODE_ENV !== "production") {
+        printEnvDiagnostics();
+      }
+      validateEnv();
+
       const port = Number(process.env.PORT ?? 3001);
       const server = app.listen(port, () => {
         console.log(`[startup] SplitNaira API listening on :${port}`);

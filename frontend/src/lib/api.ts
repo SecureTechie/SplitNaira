@@ -1,5 +1,7 @@
 import type { SplitProject } from "./stellar";
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:3001";
+import { getEnv } from "./env";
+
+const API_BASE_URL = getEnv().NEXT_PUBLIC_API_BASE_URL;
 export interface CreateSplitPayload {
   owner: string;
   projectId: string;

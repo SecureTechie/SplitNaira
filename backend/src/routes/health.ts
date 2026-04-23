@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { loadStellarConfig } from "../services/stellar.js";
+import { getEnvDiagnostics } from "../config/env.js";
 
 export const healthRouter = Router();
 
@@ -18,18 +18,19 @@ healthRouter.get("/live", (_req, res) => {
 });
 
 healthRouter.get("/ready", (_req, res) => {
-  try {
-    loadStellarConfig();
-    res.json({
-      status: "ready"
-    });
-  } catch {
+  const diagnostics = getEnvDiagnostics();
+
+  if (!diagnostics.ok) {
     const requestId = res.locals.requestId;
     res.status(503).json({
       status: "not_ready",
       error: "missing_config",
-      message: "Required Stellar environment variables are missing.",
+      message: "Required environment variables are missing or malformed.",
+      issues: diagnostics.issues,
       requestId
     });
+    return;
   }
+
+  res.json({ status: "ready" });
 });
