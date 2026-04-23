@@ -3,7 +3,7 @@
 use super::*;
 use soroban_sdk::{
     testutils::{Address as _, Events as _},
-    token, Address, Env, IntoVal, String, Symbol, Vec, vec,
+    token, vec, Address, Env, IntoVal, String, Symbol, Vec,
 };
 
 // ============================================================
@@ -1032,33 +1032,33 @@ fn test_deposit_emits_deposit_received_event() {
     token_client.mint(&funder, &amount);
     client.deposit(&project_id, &funder, &amount);
 
-    // Verify balance was credited correctly
+    // Verify balance was credited correctly.
     assert_eq!(client.get_balance(&project_id), amount);
 
-    // Verify that exactly two relevant events were emitted:
-    // 1) project_created  2) deposit_received (with updated project balance)
-    let expected_events = vec![
-        &env,
-        (
-            contract_id.clone(),
-            vec![
-                &env,
-                Symbol::new(&env, "project_created").into_val(&env),
-                project_id.clone().into_val(&env),
-            ],
-            owner.clone().into_val(&env),
-        ),
-        (
-            contract_id.clone(),
-            vec![
-                &env,
-                Symbol::new(&env, "deposit_received").into_val(&env),
-                project_id.clone().into_val(&env),
-            ],
-            (funder.clone(), amount, amount).into_val(&env),
-        ),
-    ];
-    assert_eq!(env.events().all(), expected_events);
+    // Soroban host and token operations may emit additional events; assert that
+    // contract-level project and deposit events are present with expected data.
+    let all_events = env.events().all();
+    let expected_project_event = (
+        contract_id.clone(),
+        vec![
+            &env,
+            Symbol::new(&env, "project_created").into_val(&env),
+            project_id.clone().into_val(&env),
+        ],
+        owner.clone().into_val(&env),
+    );
+    let expected_deposit_event = (
+        contract_id.clone(),
+        vec![
+            &env,
+            Symbol::new(&env, "deposit_received").into_val(&env),
+            project_id.clone().into_val(&env),
+        ],
+        (funder.clone(), amount, amount).into_val(&env),
+    );
+
+    assert!(all_events.contains(expected_project_event));
+    assert!(all_events.contains(expected_deposit_event));
 }
 
 // ============================================================
@@ -1152,7 +1152,7 @@ fn test_get_claimable_after_distribution() {
 
 #[test]
 fn test_pause_distributions_requires_admin() {
-    let (env, _admin, token) = create_test_env();
+    let (env, _admin, _token) = create_test_env();
     let contract_id = env.register_contract(None, SplitNairaContract);
     let client = SplitNairaContractClient::new(&env, &contract_id);
 
@@ -1164,7 +1164,7 @@ fn test_pause_distributions_requires_admin() {
 
 #[test]
 fn test_pause_and_unpause_distributions() {
-    let (env, _admin, token) = create_test_env();
+    let (env, _admin, _token) = create_test_env();
     let contract_id = env.register_contract(None, SplitNairaContract);
     let client = SplitNairaContractClient::new(&env, &contract_id);
 
@@ -1213,7 +1213,14 @@ fn test_distribute_fails_when_paused() {
     );
 
     // Deposit funds
-    deposit_to_project(&env, &client, &token, &project_id, &funder, 1000_0000000i128);
+    deposit_to_project(
+        &env,
+        &client,
+        &token,
+        &project_id,
+        &funder,
+        1000_0000000i128,
+    );
     assert_eq!(client.get_balance(&project_id), 1000_0000000i128);
 
     // Pause distributions
@@ -1473,6 +1480,54 @@ fn test_project_exists_returns_false_for_missing_project() {
     );
 }
 
+#[test]
+fn test_refresh_project_storage_succeeds_for_existing_project() {
+    let (env, _admin, token) = create_test_env();
+    let contract_id = env.register_contract(None, SplitNairaContract);
+    let client = SplitNairaContractClient::new(&env, &contract_id);
+
+    let owner = Address::generate(&env);
+    let funder = Address::generate(&env);
+    let alice = Address::generate(&env);
+    let bob = Address::generate(&env);
+    let collabs = make_collaborators(
+        &env,
+        Vec::from_slice(&env, &[alice.clone(), bob.clone()]),
+        Vec::from_slice(&env, &[5000u32, 5000u32]),
+    );
+
+    let project_id = Symbol::new(&env, "refreshable");
+    client.create_project(
+        &owner,
+        &project_id,
+        &String::from_str(&env, "Refreshable"),
+        &String::from_str(&env, "music"),
+        &token,
+        &collabs,
+    );
+
+    // Create claimed entries so refresh covers project-scoped payout ledgers too.
+    deposit_to_project(&env, &client, &token, &project_id, &funder, 100_0000000i128);
+    client.distribute(&project_id);
+
+    client.refresh_project_storage(&project_id);
+
+    let info = client.get_claimable(&project_id, &alice);
+    assert_eq!(info.distribution_round, 1);
+    assert_eq!(client.get_claimed(&project_id, &alice), 50_0000000i128);
+    assert_eq!(client.get_claimed(&project_id, &bob), 50_0000000i128);
+}
+
+#[test]
+fn test_refresh_project_storage_fails_for_missing_project() {
+    let (env, _admin, _token) = create_test_env();
+    let contract_id = env.register_contract(None, SplitNairaContract);
+    let client = SplitNairaContractClient::new(&env, &contract_id);
+
+    let result = client.try_refresh_project_storage(&Symbol::new(&env, "missing_refresh"));
+    assert_eq!(result, Err(Ok(SplitError::NotFound)));
+}
+
 // ============================================================
 //  unallocated RECOVERY TESTS
 // ============================================================
@@ -1658,10 +1713,7 @@ fn test_lifecycle_pre_lock_edit_lock_post_lock_reject() {
         after_metadata.title,
         String::from_str(&env, "Lifecycle Project (renamed)")
     );
-    assert_eq!(
-        after_metadata.project_type,
-        String::from_str(&env, "film")
-    );
+    assert_eq!(after_metadata.project_type, String::from_str(&env, "film"));
 
     // 4. Owner locks the project — allowed.
     client.lock_project(&project_id, &owner);
@@ -1674,8 +1726,7 @@ fn test_lifecycle_pre_lock_edit_lock_post_lock_reject() {
         Vec::from_slice(&env, &[alice.clone(), bob.clone()]),
         Vec::from_slice(&env, &[7000u32, 3000u32]),
     );
-    let collab_result =
-        client.try_update_collaborators(&project_id, &owner, &post_lock_collabs);
+    let collab_result = client.try_update_collaborators(&project_id, &owner, &post_lock_collabs);
     assert_eq!(collab_result, Err(Ok(SplitError::ProjectLocked)));
 
     // 6. Owner tries to edit metadata after lock — ProjectLocked.
@@ -1763,13 +1814,18 @@ fn test_non_owner_cannot_update_collaborators() {
         Vec::from_slice(&env, &[alice, bob, carol]),
         Vec::from_slice(&env, &[1000u32, 1000u32, 8000u32]),
     );
-    let result =
-        client.try_update_collaborators(&project_id, &not_owner, &attacker_collabs);
+    let result = client.try_update_collaborators(&project_id, &not_owner, &attacker_collabs);
     assert_eq!(result, Err(Ok(SplitError::Unauthorized)));
 
     // And the original collaborator set must be intact.
     let project = client.get_project(&project_id).unwrap();
     assert_eq!(project.collaborators.len(), 2);
-    assert_eq!(project.collaborators.get(0u32).unwrap().basis_points, 5000u32);
-    assert_eq!(project.collaborators.get(1u32).unwrap().basis_points, 5000u32);
+    assert_eq!(
+        project.collaborators.get(0u32).unwrap().basis_points,
+        5000u32
+    );
+    assert_eq!(
+        project.collaborators.get(1u32).unwrap().basis_points,
+        5000u32
+    );
 }

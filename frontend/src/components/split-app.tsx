@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { rpc, Transaction, StrKey } from "@stellar/stellar-sdk";
 import { clsx } from "clsx";
 
@@ -194,7 +194,7 @@ export function SplitApp() {
     showToast("Wallet disconnected.", "info");
   }
 
-  function onWizardNext() {
+  function _onWizardNext() {
     if (createStep === 1 && isStep1Valid) {
       setCreateStep(2);
     } else if (createStep === 2 && isStep2Valid) {
@@ -204,13 +204,13 @@ export function SplitApp() {
     }
   }
 
-  function onWizardBack() {
+  function _onWizardBack() {
     if (createStep > 1) {
       setCreateStep(createStep - 1);
     }
   }
 
-  function onWizardReset() {
+  function _onWizardReset() {
     setCreateStep(1);
     setProjectId("");
     setTitle("");
@@ -570,7 +570,7 @@ export function SplitApp() {
   };
 
   // Phase 3: Fetch projects list from seeded IDs
-  const onFetchProjectsList = async () => {
+  const onFetchProjectsList = useCallback(async () => {
     setIsLoadingProjectsList(true);
     try {
       const projects: SplitProject[] = [];
@@ -592,14 +592,14 @@ export function SplitApp() {
     } finally {
       setIsLoadingProjectsList(false);
     }
-  };
+  }, [showToast]);
 
   // Load projects list when switching to Projects tab
   useEffect(() => {
     if (activeTab === "projects" && projectsList.length === 0 && !isLoadingProjectsList) {
       void onFetchProjectsList();
     }
-  }, [activeTab]);
+  }, [activeTab, isLoadingProjectsList, onFetchProjectsList, projectsList.length]);
 
   return (
     <main className="min-h-screen px-6 py-12 md:px-12 selection:bg-greenBright/10 selection:text-greenBright">

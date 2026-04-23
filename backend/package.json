@@ -9,6 +9,7 @@
     "start": "node dist/index.js",
     "lint": "eslint .",
     "test": "vitest run",
+    "test:compat": "vitest run src/routes/splits.compatibility.test.ts",
     "test:watch": "vitest --watch",
     "deps:check": "npm ls --all --omit=optional"
   },

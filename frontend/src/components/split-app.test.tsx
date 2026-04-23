@@ -100,7 +100,7 @@ describe("SplitApp lock project flow", () => {
 
   it("shows lock button for owner when project is unlocked", async () => {
     await loadProject();
-    expect(screen.getByRole("button", { name: "Lock Project" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Lock Project" })).toBeTruthy();
   });
 
   it("hides lock button for non-owner", async () => {
@@ -111,31 +111,31 @@ describe("SplitApp lock project flow", () => {
     });
 
     await loadProject();
-    expect(screen.queryByRole("button", { name: "Lock Project" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Lock Project" })).toBeNull();
   });
 
   it("hides lock button and shows locked indicator when already locked", async () => {
     mocks.mockGetSplit.mockResolvedValue({ ...baseProject, locked: true });
 
     await loadProject();
-    expect(screen.queryByRole("button", { name: "Lock Project" })).not.toBeInTheDocument();
-    expect(screen.getByText("Split locked - immutable")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Lock Project" })).toBeNull();
+    expect(screen.getByText("Split locked - immutable")).toBeTruthy();
   });
 
   it("renders warning text and cancel closes modal without lock action", async () => {
     const user = await loadProject();
     await user.click(screen.getByRole("button", { name: "Lock Project" }));
 
-    expect(screen.getByRole("dialog")).toBeInTheDocument();
+    expect(screen.getByRole("dialog")).toBeTruthy();
     expect(
       screen.getByText(
         "This action is permanent and cannot be undone. Once locked, the split configuration can never be changed."
       )
-    ).toBeInTheDocument();
+    ).toBeTruthy();
 
     await user.click(screen.getByRole("button", { name: "Cancel" }));
     await waitFor(() => {
-      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+      expect(screen.queryByRole("dialog")).toBeNull();
     });
     expect(mocks.mockBuildLockProjectXdr).not.toHaveBeenCalled();
   });
@@ -158,7 +158,7 @@ describe("SplitApp lock project flow", () => {
     const dialog = screen.getByRole("dialog");
     await user.click(within(dialog).getByRole("button", { name: "Lock Project" }));
 
-    expect(within(dialog).getByRole("button", { name: "Locking..." })).toBeDisabled();
+    expect(within(dialog).getByRole("button", { name: "Locking..." })).toHaveProperty("disabled", true);
 
     resolveLock?.();
     await waitFor(() => {
@@ -197,8 +197,8 @@ describe("Issue #174: owner gating and lock lifecycle", () => {
     });
 
     await loadProject();
-    expect(screen.queryByRole("button", { name: "Lock Project" })).not.toBeInTheDocument();
-    expect(screen.queryByText("Split locked - immutable")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Lock Project" })).toBeNull();
+    expect(screen.queryByText("Split locked - immutable")).toBeNull();
   });
 
   it("non-owner with wallet connected to a different address cannot lock", async () => {
@@ -209,29 +209,29 @@ describe("Issue #174: owner gating and lock lifecycle", () => {
     });
 
     await loadProject();
-    expect(screen.queryByRole("button", { name: "Lock Project" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Lock Project" })).toBeNull();
   });
 
   it("owner sees both lock button AND no locked banner on unlocked project", async () => {
     await loadProject();
-    expect(screen.getByRole("button", { name: "Lock Project" })).toBeInTheDocument();
-    expect(screen.queryByText("Split locked - immutable")).not.toBeInTheDocument();
-    expect(screen.queryByText(/Locked state active/)).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Lock Project" })).toBeTruthy();
+    expect(screen.queryByText("Split locked - immutable")).toBeNull();
+    expect(screen.queryByText(/Locked state active/)).toBeNull();
   });
 
   it("locked project shows both locked-immutable badge and 'Locked state active' secondary message", async () => {
     mocks.mockGetSplit.mockResolvedValue({ ...baseProject, locked: true });
 
     await loadProject();
-    expect(screen.getByText("Split locked - immutable")).toBeInTheDocument();
-    expect(screen.getByText(/Locked state active/)).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Lock Project" })).not.toBeInTheDocument();
+    expect(screen.getByText("Split locked - immutable")).toBeTruthy();
+    expect(screen.getByText(/Locked state active/)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Lock Project" })).toBeNull();
   });
 
   it("lifecycle: confirming the lock modal invokes buildLockProjectXdr with owner address and project id", async () => {
     const user = await loadProject();
-    expect(screen.getByRole("button", { name: "Lock Project" })).toBeInTheDocument();
-    expect(screen.queryByText("Split locked - immutable")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Lock Project" })).toBeTruthy();
+    expect(screen.queryByText("Split locked - immutable")).toBeNull();
 
     await user.click(screen.getByRole("button", { name: "Lock Project" }));
     const dialog = screen.getByRole("dialog");
@@ -253,8 +253,8 @@ describe("Issue #174: owner gating and lock lifecycle", () => {
     mocks.mockGetSplit.mockResolvedValue({ ...baseProject, locked: true });
 
     await loadProject();
-    expect(screen.getByText("Split locked - immutable")).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Lock Project" })).not.toBeInTheDocument();
+    expect(screen.getByText("Split locked - immutable")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Lock Project" })).toBeNull();
   });
 });
 
@@ -278,16 +278,16 @@ describe("SplitApp distribute flow", () => {
 
   it("shows distribute button when project has balance and wallet connected", async () => {
     await loadProject();
-    expect(screen.getByRole("button", { name: "Trigger Distribution" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Trigger Distribution" })).toBeTruthy();
   });
 
   it("opens distribution modal with Final Confirmation heading", async () => {
     const user = await loadProject();
     await user.click(screen.getByRole("button", { name: "Trigger Distribution" }));
 
-    expect(screen.getByRole("heading", { name: "Final Confirmation" })).toBeInTheDocument();
-    expect(screen.getByText(/Splitting/)).toBeInTheDocument();
-    expect(screen.getByText("5,000 stroops")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Final Confirmation" })).toBeTruthy();
+    expect(screen.getByText(/Splitting/)).toBeTruthy();
+    expect(screen.getByText("5,000 stroops")).toBeTruthy();
   });
 
   it("shows collaborator payment preview in modal", async () => {
@@ -295,8 +295,8 @@ describe("SplitApp distribute flow", () => {
     await user.click(screen.getByRole("button", { name: "Trigger Distribution" }));
 
     const modal = screen.getByRole("heading", { name: "Final Confirmation" }).parentElement;
-    expect(within(modal!).getByText("60.00% Share")).toBeInTheDocument();
-    expect(within(modal!).getByText("40.00% Share")).toBeInTheDocument();
+    expect(within(modal!).getByText("60.00% Share")).toBeTruthy();
+    expect(within(modal!).getByText("40.00% Share")).toBeTruthy();
   });
 
   it("cancels distribution when cancel button clicked", async () => {
@@ -305,7 +305,7 @@ describe("SplitApp distribute flow", () => {
     await user.click(screen.getByRole("button", { name: "Cancel" }));
 
     await waitFor(() => {
-      expect(screen.queryByRole("heading", { name: "Final Confirmation" })).not.toBeInTheDocument();
+      expect(screen.queryByRole("heading", { name: "Final Confirmation" })).toBeNull();
     });
     expect(mocks.mockBuildDistributeXdr).not.toHaveBeenCalled();
   });
@@ -328,14 +328,14 @@ describe("SplitApp distribute flow", () => {
     });
 
     await loadProject();
-    expect(screen.getByRole("button", { name: "Trigger Distribution" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Trigger Distribution" })).toHaveProperty("disabled", true);
   });
 
   it("disables distribute button when balance is zero", async () => {
     mocks.mockGetSplit.mockResolvedValue({ ...baseProject, balance: "0" });
 
     await loadProject();
-    expect(screen.getByRole("button", { name: "Trigger Distribution" })).toBeDisabled();
-    expect(screen.getByText("No funds available to distribute")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Trigger Distribution" })).toHaveProperty("disabled", true);
+    expect(screen.getByText("No funds available to distribute")).toBeTruthy();
   });
 });

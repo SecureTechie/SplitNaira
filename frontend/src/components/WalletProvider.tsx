@@ -26,7 +26,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     if (guard.mismatch) {
       toast(guard.message, "error", 0 /* sticky — user must dismiss */);
     }
-  }, [guard.mismatch]); // intentionally omit `toast` & `guard.message` — only react to mismatch toggling
+  }, [guard.message, guard.mismatch, toast]);
 
   return (
     <WalletContext.Provider
