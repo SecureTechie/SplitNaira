@@ -217,6 +217,112 @@ describe("splits routes integration", () => {
     expect(getAccountMock).toHaveBeenCalledWith("GTESTSIMULATOR");
   });
 
+  it("builds allow_token transaction", async () => {
+    getAccountMock.mockResolvedValue({ accountId: "GADMIN" });
+    prepareTransactionMock.mockResolvedValue({
+      toXDR: () => "XDR_ALLOW_TOKEN",
+      sequence: "100",
+      fee: "100"
+    });
+
+    const app = createApp();
+
+    const response = await request(app)
+      .post("/splits/admin/allow-token")
+      .send({ admin: "GADMIN", token: "GTOKEN" })
+      .expect(200);
+
+    expect(response.body).toMatchObject({
+      xdr: "XDR_ALLOW_TOKEN",
+      metadata: {
+        contractId: "TESTCONTRACT",
+        networkPassphrase: "Test SDF Network",
+        sourceAccount: "GADMIN",
+        operation: "allow_token"
+      }
+    });
+
+    expect(getAccountMock).toHaveBeenCalledWith("GADMIN");
+  });
+
+  it("builds disallow_token transaction", async () => {
+    getAccountMock.mockResolvedValue({ accountId: "GADMIN" });
+    prepareTransactionMock.mockResolvedValue({
+      toXDR: () => "XDR_DISALLOW_TOKEN",
+      sequence: "101",
+      fee: "100"
+    });
+
+    const app = createApp();
+
+    const response = await request(app)
+      .post("/splits/admin/disallow-token")
+      .send({ admin: "GADMIN", token: "GTOKEN" })
+      .expect(200);
+
+    expect(response.body).toMatchObject({
+      xdr: "XDR_DISALLOW_TOKEN",
+      metadata: {
+        contractId: "TESTCONTRACT",
+        networkPassphrase: "Test SDF Network",
+        sourceAccount: "GADMIN",
+        operation: "disallow_token"
+      }
+    });
+
+    expect(getAccountMock).toHaveBeenCalledWith("GADMIN");
+  });
+
+  it("returns 400 for allow_token with missing fields", async () => {
+    const app = createApp();
+
+    const response = await request(app)
+      .post("/splits/admin/allow-token")
+      .send({ admin: "GADMIN" }) // missing token
+      .expect(400);
+
+    expect(response.body.error).toBe("validation_error");
+  });
+
+  it("returns 400 for disallow_token with missing fields", async () => {
+    const app = createApp();
+
+    const response = await request(app)
+      .post("/splits/admin/disallow-token")
+      .send({ token: "GTOKEN" }) // missing admin
+      .expect(400);
+
+    expect(response.body.error).toBe("validation_error");
+  });
+
+  it("returns 400 for allow_token when admin account not found", async () => {
+    getAccountMock.mockRejectedValue(new Error("not found"));
+
+    const app = createApp();
+
+    const response = await request(app)
+      .post("/splits/admin/allow-token")
+      .send({ admin: "GADMIN", token: "GTOKEN" })
+      .expect(400);
+
+    expect(response.body.error).toBe("validation_error");
+    expect(response.body.message).toMatch(/admin account not found/);
+  });
+
+  it("returns 400 for disallow_token when admin account not found", async () => {
+    getAccountMock.mockRejectedValue(new Error("not found"));
+
+    const app = createApp();
+
+    const response = await request(app)
+      .post("/splits/admin/disallow-token")
+      .send({ admin: "GADMIN", token: "GTOKEN" })
+      .expect(400);
+
+    expect(response.body.error).toBe("validation_error");
+    expect(response.body.message).toMatch(/admin account not found/);
+  });
+
   it("retrieves history filtered and sorted", async () => {
     getAccountMock.mockResolvedValue({ accountId: "GSIM" });
 

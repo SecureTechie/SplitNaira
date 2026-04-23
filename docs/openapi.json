@@ -92,7 +92,7 @@
           },
           "operation": {
             "type": "string",
-            "description": "The operation being performed. Possible values: create_project, lock_project, update_collaborators, distribute",
+            "description": "The operation being performed. Possible values: create_project, lock_project, update_collaborators, distribute, allow_token, disallow_token",
             "example": "create_project"
           }
         },
@@ -262,6 +262,15 @@
         "type": "object",
         "properties": {
           "sourceAddress": { "type": "string", "example": "GABCDEF12345..." }
+        },
+        "additionalProperties": false
+      },
+      "AdminTokenRequest": {
+        "type": "object",
+        "required": ["admin", "token"],
+        "properties": {
+          "admin": { "type": "string", "example": "GADMIN12345..." },
+          "token": { "type": "string", "example": "CTOKEN1234..." }
         },
         "additionalProperties": false
       },
@@ -876,6 +885,110 @@
             "content": {
               "application/json": {
                 "schema": { "$ref": "#/components/schemas/HistoryResponse" }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/RequestIdError" }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/RequestIdError" }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/RequestIdError" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/splits/admin/allow-token": {
+      "post": {
+        "tags": ["splits"],
+        "summary": "Build unsigned transaction to add a token to the allowlist",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/AdminTokenRequest" },
+              "example": {
+                "admin": "GADMIN12345...",
+                "token": "CTOKEN1234..."
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Transaction built",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/BuildTransactionResponse" }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/RequestIdError" }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/RequestIdError" }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/RequestIdError" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/splits/admin/disallow-token": {
+      "post": {
+        "tags": ["splits"],
+        "summary": "Build unsigned transaction to remove a token from the allowlist",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/AdminTokenRequest" },
+              "example": {
+                "admin": "GADMIN12345...",
+                "token": "CTOKEN1234..."
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Transaction built",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/BuildTransactionResponse" }
               }
             }
           },

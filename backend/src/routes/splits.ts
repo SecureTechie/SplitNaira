@@ -731,6 +731,156 @@ splitsRouter.post("/:projectId/distribute", async (req: Request, res: Response, 
   }
 });
 
+const adminTokenSchema = z.object({
+  admin: stellarAddressSchema.describe("admin"),
+  token: stellarAddressSchema.describe("token")
+});
+
+interface AdminTokenRequest {
+  admin: string;
+  token: string;
+}
+
+async function buildAllowTokenUnsignedXdr(input: AdminTokenRequest) {
+  const config = loadStellarConfig();
+  const server = getStellarRpcServer();
+
+  let sourceAccount;
+  try {
+    sourceAccount = await server.getAccount(input.admin);
+  } catch {
+    throw new RequestValidationError("admin account not found on selected network");
+  }
+
+  const adminAddress = Address.fromString(input.admin);
+  const tokenAddress = Address.fromString(input.token);
+
+  const contract = new Contract(config.contractId);
+  const tx = new TransactionBuilder(sourceAccount, {
+    fee: BASE_FEE,
+    networkPassphrase: config.networkPassphrase
+  })
+    .addOperation(
+      contract.call("allow_token", adminAddress.toScVal(), tokenAddress.toScVal())
+    )
+    .setTimeout(300)
+    .build();
+
+  const preparedTx = await server.prepareTransaction(tx);
+  return {
+    xdr: preparedTx.toXDR(),
+    metadata: {
+      contractId: config.contractId,
+      networkPassphrase: config.networkPassphrase,
+      sourceAccount: input.admin,
+      sequenceNumber: preparedTx.sequence,
+      fee: preparedTx.fee,
+      operation: "allow_token"
+    }
+  };
+}
+
+async function buildDisallowTokenUnsignedXdr(input: AdminTokenRequest) {
+  const config = loadStellarConfig();
+  const server = getStellarRpcServer();
+
+  let sourceAccount;
+  try {
+    sourceAccount = await server.getAccount(input.admin);
+  } catch {
+    throw new RequestValidationError("admin account not found on selected network");
+  }
+
+  const adminAddress = Address.fromString(input.admin);
+  const tokenAddress = Address.fromString(input.token);
+
+  const contract = new Contract(config.contractId);
+  const tx = new TransactionBuilder(sourceAccount, {
+    fee: BASE_FEE,
+    networkPassphrase: config.networkPassphrase
+  })
+    .addOperation(
+      contract.call("disallow_token", adminAddress.toScVal(), tokenAddress.toScVal())
+    )
+    .setTimeout(300)
+    .build();
+
+  const preparedTx = await server.prepareTransaction(tx);
+  return {
+    xdr: preparedTx.toXDR(),
+    metadata: {
+      contractId: config.contractId,
+      networkPassphrase: config.networkPassphrase,
+      sourceAccount: input.admin,
+      sequenceNumber: preparedTx.sequence,
+      fee: preparedTx.fee,
+      operation: "disallow_token"
+    }
+  };
+}
+
+splitsRouter.post("/admin/allow-token", async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const requestId = res.locals.requestId;
+    const parsed = adminTokenSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({
+        error: "validation_error",
+        message: "Invalid request payload.",
+        details: parsed.error.flatten(),
+        requestId
+      });
+    }
+
+    try {
+      const result = await buildAllowTokenUnsignedXdr(parsed.data);
+      return res.status(200).json(result);
+    } catch (error) {
+      if (error instanceof RequestValidationError) {
+        return res.status(400).json({
+          error: "validation_error",
+          message: error.message,
+          requestId
+        });
+      }
+      throw error;
+    }
+  } catch (error) {
+    return next(error);
+  }
+});
+
+splitsRouter.post("/admin/disallow-token", async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const requestId = res.locals.requestId;
+    const parsed = adminTokenSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({
+        error: "validation_error",
+        message: "Invalid request payload.",
+        details: parsed.error.flatten(),
+        requestId
+      });
+    }
+
+    try {
+      const result = await buildDisallowTokenUnsignedXdr(parsed.data);
+      return res.status(200).json(result);
+    } catch (error) {
+      if (error instanceof RequestValidationError) {
+        return res.status(400).json({
+          error: "validation_error",
+          message: error.message,
+          requestId
+        });
+      }
+      throw error;
+    }
+  } catch (error) {
+    return next(error);
+  }
+});
+
 const historyQuerySchema = z.object({
   cursor: z.string().default(""),
   limit: z.coerce.number().int().min(1).max(200).default(100)
