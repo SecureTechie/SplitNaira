@@ -1,4 +1,5 @@
 import { rpc } from "@stellar/stellar-sdk";
+import { getEnv } from "../config/env.js";
 
 export interface StellarConfig {
   horizonUrl: string;
@@ -23,30 +24,14 @@ export function loadStellarConfig(): StellarConfig {
     return cachedConfig;
   }
 
-  const {
-    HORIZON_URL,
-    SOROBAN_RPC_URL,
-    SOROBAN_NETWORK_PASSPHRASE,
-    CONTRACT_ID,
-    SIMULATOR_ACCOUNT
-  } = process.env;
-
-  if (
-    !HORIZON_URL ||
-    !SOROBAN_RPC_URL ||
-    !SOROBAN_NETWORK_PASSPHRASE ||
-    !CONTRACT_ID ||
-    !SIMULATOR_ACCOUNT
-  ) {
-    throw new Error("Missing Stellar configuration env vars.");
-  }
+  const env = getEnv();
 
   cachedConfig = {
-    horizonUrl: HORIZON_URL,
-    sorobanRpcUrl: SOROBAN_RPC_URL,
-    networkPassphrase: SOROBAN_NETWORK_PASSPHRASE,
-    contractId: CONTRACT_ID,
-    simulatorAccount: SIMULATOR_ACCOUNT
+    horizonUrl: env.HORIZON_URL,
+    sorobanRpcUrl: env.SOROBAN_RPC_URL,
+    networkPassphrase: env.SOROBAN_NETWORK_PASSPHRASE,
+    contractId: env.CONTRACT_ID,
+    simulatorAccount: env.SIMULATOR_ACCOUNT
   };
 
   return cachedConfig;

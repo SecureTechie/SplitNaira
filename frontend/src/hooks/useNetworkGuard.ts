@@ -2,6 +2,7 @@
 
 import { useMemo } from "react";
 import type { WalletState } from "../lib/freighter";
+import { getEnv } from "../lib/env";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -43,7 +44,7 @@ function normalise(network: string): string {
  * if (mismatch) return <NetworkWarningBanner message={message} />;
  */
 export function useNetworkGuard(wallet: WalletState): NetworkGuardResult {
-  const expectedNetwork = process.env.NEXT_PUBLIC_STELLAR_NETWORK ?? "testnet";
+  const expectedNetwork = getEnv().NEXT_PUBLIC_STELLAR_NETWORK;
 
   return useMemo<NetworkGuardResult>(() => {
     // If the wallet is not connected there is nothing to compare yet

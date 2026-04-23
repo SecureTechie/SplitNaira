@@ -9,6 +9,8 @@ import {
   buildDepositXdr,
   buildDistributeXdr,
   buildLockProjectXdr,
+  getAllSplits,
+  getClaimable,
   getProjectHistory,
   getSplit,
   type ProjectHistoryItem,
@@ -65,7 +67,7 @@ export function SplitApp() {
     null,
   );
 
-  const [activeTab, setActiveTab] = useState<"create" | "manage" | "projects">("create");
+  const [activeTab, setActiveTab] = useState<"dashboard" | "create" | "manage" | "projects">("dashboard");
   const [createStep, setCreateStep] = useState(1); // 1: Project, 2: Collaborators, 3: Review, 4: Submit
   const [searchProjectId, setSearchProjectId] = useState("");
   const [fetchedProject, setFetchedProject] = useState<SplitProject | null>(
@@ -87,6 +89,11 @@ export function SplitApp() {
   const [projectsList, setProjectsList] = useState<SplitProject[]>([]);
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
   const [isLoadingProjectsList, setIsLoadingProjectsList] = useState(false);
+
+  // Earnings Dashboard state
+  const [dashboardData, setDashboardData] = useState<SplitProject[]>([]);
+  const [userEarnings, setUserEarnings] = useState<Record<string, string>>({});
+  const [isLoadingDashboard, setIsLoadingDashboard] = useState(false);
 
   const totalBasisPoints = useMemo(
     () =>
@@ -316,7 +323,7 @@ export function SplitApp() {
     setIsLoadingHistory(true);
     try {
       const data = await getProjectHistory(id);
-      setHistory(data);
+      setHistory(data.items);
     } catch (error) {
       console.error("Failed to fetch history:", error);
     } finally {
@@ -594,12 +601,53 @@ export function SplitApp() {
     }
   }, [showToast]);
 
+  const onFetchDashboardData = async () => {
+    setIsLoadingDashboard(true);
+    try {
+      const projects = await getAllSplits();
+      setDashboardData(projects);
+
+      if (wallet.connected && wallet.address) {
+        const earnings: Record<string, string> = {};
+        // Fetch user earnings for each project non-blocking
+        await Promise.all(
+          projects
+            .filter(p => p.collaborators.some(c => c.address === wallet.address) || p.owner === wallet.address)
+            .map(async (p) => {
+              try {
+                const info = await getClaimable(p.projectId, wallet.address!);
+                earnings[p.projectId] = String(info.claimed);
+              } catch (e) {
+                console.error(`Failed to fetch earnings for ${p.projectId}`, e);
+              }
+            })
+        );
+        setUserEarnings(earnings);
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to load dashboard.";
+      showToast(message, "error");
+    } finally {
+      setIsLoadingDashboard(false);
+    }
+  };
+
   // Load projects list when switching to Projects tab
   useEffect(() => {
     if (activeTab === "projects" && projectsList.length === 0 && !isLoadingProjectsList) {
       void onFetchProjectsList();
+    } else if (activeTab === "dashboard" && dashboardData.length === 0 && !isLoadingDashboard) {
+      void onFetchDashboardData();
     }
-  }, [activeTab, isLoadingProjectsList, onFetchProjectsList, projectsList.length]);
+  }, [
+    activeTab,
+    dashboardData.length,
+    isLoadingDashboard,
+    isLoadingProjectsList,
+    onFetchDashboardData,
+    onFetchProjectsList,
+    projectsList.length
+  ]);
 
   return (
     <main className="min-h-screen px-6 py-12 md:px-12 selection:bg-greenBright/10 selection:text-greenBright">
@@ -668,6 +716,17 @@ export function SplitApp() {
         {/* Tab Navigation */}
         <div className="flex gap-1 rounded-full bg-white/5 p-1.5 self-center">
           <button
+            onClick={() => setActiveTab("dashboard")}
+            className={clsx(
+              "rounded-full px-8 py-2.5 text-xs font-bold uppercase tracking-widest transition-all",
+              activeTab === "dashboard"
+                ? "bg-white/10 text-ink shadow-sm"
+                : "text-muted hover:text-ink/80",
+            )}
+          >
+            Dashboard
+          </button>
+          <button
             onClick={() => setActiveTab("create")}
             className={clsx(
               "rounded-full px-8 py-2.5 text-xs font-bold uppercase tracking-widest transition-all",
@@ -700,7 +759,106 @@ export function SplitApp() {
           </button>
         </div>
 
-        {activeTab === "create" ? (
+        {activeTab === "dashboard" ? (
+          <div className="space-y-10 animate-in fade-in duration-700">
+            {/* Summary Cards */}
+            <div className="grid gap-6 md:grid-cols-3">
+              <div className="glass-card rounded-3xl p-8 border-l-4 border-greenBright">
+                <p className="text-[10px] font-bold uppercase tracking-[0.2em] text-muted mb-2">Total Managed</p>
+                <p className="text-3xl font-display">{dashboardData.length} <span className="text-sm font-sans text-muted">Projects</span></p>
+              </div>
+              <div className="glass-card rounded-3xl p-8 border-l-4 border-goldLight">
+                <p className="text-[10px] font-bold uppercase tracking-[0.2em] text-muted mb-2">Platform Treasury</p>
+                <p className="text-3xl font-display text-greenBright">
+                  {dashboardData.reduce((sum, p) => sum + Number(p.balance), 0).toLocaleString()}
+                  <span className="text-sm font-sans text-muted ml-2">Stroops</span>
+                </p>
+              </div>
+              <div className="glass-card rounded-3xl p-8 border-l-4 border-white/20">
+                <p className="text-[10px] font-bold uppercase tracking-[0.2em] text-muted mb-2">Lifetime Payouts</p>
+                <p className="text-3xl font-display">
+                  {dashboardData.reduce((sum, p) => sum + Number(p.totalDistributed), 0).toLocaleString()}
+                </p>
+              </div>
+            </div>
+
+            {/* User Earnings Section */}
+            {wallet.connected && (
+              <div className="glass-card rounded-[2.5rem] p-8 md:p-10 bg-greenMid/5 border-greenBright/10">
+                <div className="flex items-center justify-between mb-8">
+                  <div className="space-y-1">
+                    <h2 className="font-display text-2xl tracking-tight">Your Cumulative Earnings</h2>
+                    <p className="text-sm text-muted">Aggregate revenue share across all active contracts.</p>
+                  </div>
+                  <div className="text-right">
+                    <p className="text-4xl font-display text-greenBright">
+                      {Object.values(userEarnings).reduce((sum, val) => sum + Number(val), 0).toLocaleString()}
+                      <span className="text-sm font-sans opacity-40 ml-2">Stroops</span>
+                    </p>
+                  </div>
+                </div>
+
+                <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+                  {dashboardData
+                    .filter(p => p.collaborators.some(c => c.address === wallet.address))
+                    .map(p => (
+                      <div key={p.projectId} className="bg-white/5 rounded-2xl p-5 border border-white/5 flex justify-between items-center">
+                        <div className="space-y-1">
+                          <p className="font-bold text-xs truncate max-w-[120px]">{p.title}</p>
+                          <p className="text-[9px] text-muted uppercase tracking-widest">
+                            {(p.collaborators.find(c => c.address === wallet.address)?.basisPoints ?? 0) / 100}% Share
+                          </p>
+                        </div>
+                        <p className="font-mono text-sm font-bold text-greenBright/80">
+                          +{Number(userEarnings[p.projectId] || 0).toLocaleString()}
+                        </p>
+                      </div>
+                    ))}
+                </div>
+              </div>
+            )}
+
+            {/* Performance Rollups */}
+            <div className="glass-card rounded-[2.5rem] p-8 md:p-10">
+              <h2 className="font-display text-2xl tracking-tight mb-8">Project Performance Rollups</h2>
+              <div className="overflow-x-auto">
+                <table className="w-full text-left">
+                  <thead>
+                    <tr className="text-[10px] font-bold uppercase tracking-[0.2em] text-muted border-b border-white/5">
+                      <th className="pb-4 pl-4">Project</th>
+                      <th className="pb-4">Category</th>
+                      <th className="pb-4 text-right">Balance</th>
+                      <th className="pb-4 text-right">Distributed</th>
+                      <th className="pb-4 text-right pr-4">Rounds</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-white/5">
+                    {dashboardData.map((p) => (
+                      <tr key={p.projectId} className="group hover:bg-white/2 transition-colors">
+                        <td className="py-4 pl-4">
+                          <p className="font-bold text-sm">{p.title}</p>
+                          <p className="text-[9px] font-mono text-muted">{p.projectId}</p>
+                        </td>
+                        <td className="py-4">
+                          <span className="rounded-full bg-white/5 px-2 py-0.5 text-[9px] font-bold uppercase">{p.projectType}</span>
+                        </td>
+                        <td className="py-4 text-right font-mono text-xs text-greenBright/80">
+                          {Number(p.balance).toLocaleString()}
+                        </td>
+                        <td className="py-4 text-right font-mono text-xs">
+                          {Number(p.totalDistributed).toLocaleString()}
+                        </td>
+                        <td className="py-4 text-right font-mono text-xs pr-4">
+                          {p.distributionRound}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        ) : activeTab === "create" ? (
           <form onSubmit={onSubmit} className="glass-card rounded-[2.5rem] p-8 md:p-10 space-y-12">
             <div className="flex items-center justify-between border-b border-white/5 pb-6">
               <h2 className="font-display text-2xl tracking-tight">

@@ -784,6 +784,60 @@ splitsRouter.post("/:projectId/distribute", async (req: Request, res: Response, 
   }
 });
 
+splitsRouter.get("/:projectId/claimable/:address", async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const requestId = res.locals.requestId;
+    const { projectId, address } = req.params;
+
+    if (!projectId || !address) {
+      return res.status(400).json({
+        error: "validation_error",
+        message: "projectId and address are required",
+        requestId
+      });
+    }
+
+    const config = loadStellarConfig();
+    const server = new rpc.Server(config.sorobanRpcUrl, { allowHttp: true });
+
+    let sourceAccount;
+    try {
+      sourceAccount = await server.getAccount(config.simulatorAccount);
+    } catch {
+      return res.status(500).json({
+        error: "server_error",
+        message: "simulator account not found",
+        requestId
+      });
+    }
+
+    const contract = new Contract(config.contractId);
+    const tx = new TransactionBuilder(sourceAccount, {
+      fee: BASE_FEE,
+      networkPassphrase: config.networkPassphrase
+    })
+      .addOperation(
+        contract.call(
+          "get_claimable",
+          nativeToScVal(projectId, { type: "symbol" }),
+          Address.fromString(address).toScVal()
+        )
+      )
+      .setTimeout(300)
+      .build();
+
+    const simulated = await server.simulateTransaction(tx);
+    const retval = "result" in simulated ? simulated.result?.retval : undefined;
+    if (!retval) {
+      return res.status(404).json({ error: "not_found", message: "Claimable info not found", requestId });
+    }
+
+    return res.status(200).json(scValToNative(retval));
+  } catch (error) {
+    return next(error);
+  }
+});
+
 const adminTokenSchema = z.object({
   admin: stellarAddressSchema.describe("admin"),
   token: stellarAddressSchema.describe("token")
