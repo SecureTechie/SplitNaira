@@ -14,7 +14,8 @@ import {
 import { 
   loadStellarConfig, 
   getStellarRpcServer, 
-  RequestValidationError 
+  RequestValidationError,
+  executeWithRetry
 } from "../services/stellar.js";
 
 export const splitsRouter = Router();
@@ -255,7 +256,8 @@ async function buildCreateProjectUnsignedXdr(
 
   let sourceAccount;
   try {
-    sourceAccount = await server.getAccount(input.owner);
+    sourceAccount = await executeWithRetry(() => server.getAccount(input.owner));
+
   } catch {
     throw new RequestValidationError("owner account not found on selected network");
   }
@@ -279,7 +281,7 @@ async function buildCreateProjectUnsignedXdr(
     .setTimeout(300)
     .build();
 
-  const preparedTx = await server.prepareTransaction(tx);
+  const preparedTx = await executeWithRetry(() => server.prepareTransaction(tx));
 
   return {
     xdr: preparedTx.toXDR(),
@@ -300,7 +302,7 @@ async function listProjects(start: number, limit: number) {
 
   let sourceAccount;
   try {
-    sourceAccount = await server.getAccount(config.simulatorAccount);
+    sourceAccount = await executeWithRetry(() => server.getAccount(config.simulatorAccount));
   } catch {
     throw new RequestValidationError("simulator account not found on selected network");
   }
@@ -316,7 +318,7 @@ async function listProjects(start: number, limit: number) {
     .setTimeout(300)
     .build();
 
-  const simulated = await server.simulateTransaction(tx);
+  const simulated = await executeWithRetry(() => server.simulateTransaction(tx));
   const retval = "result" in simulated ? simulated.result?.retval : undefined;
   if (!retval) {
     return [];
@@ -331,7 +333,7 @@ async function fetchProjectById(projectId: string) {
 
   let sourceAccount;
   try {
-    sourceAccount = await server.getAccount(config.simulatorAccount);
+    sourceAccount = await executeWithRetry(() => server.getAccount(config.simulatorAccount));
   } catch {
     throw new RequestValidationError("simulator account not found on selected network");
   }
@@ -345,7 +347,7 @@ async function fetchProjectById(projectId: string) {
     .setTimeout(300)
     .build();
 
-  const simulated = await server.simulateTransaction(tx);
+  const simulated = await executeWithRetry(() => server.simulateTransaction(tx));
   const retval = "result" in simulated ? simulated.result?.retval : undefined;
   if (!retval) {
     return null;
@@ -366,7 +368,7 @@ async function buildLockProjectUnsignedXdr(input: LockProjectRequest) {
 
   let sourceAccount;
   try {
-    sourceAccount = await server.getAccount(input.owner);
+    sourceAccount = await executeWithRetry(() => server.getAccount(input.owner));
   } catch {
     throw new RequestValidationError("owner account not found on selected network");
   }
@@ -389,7 +391,7 @@ async function buildLockProjectUnsignedXdr(input: LockProjectRequest) {
     .setTimeout(300)
     .build();
 
-  const preparedTx = await server.prepareTransaction(tx);
+  const preparedTx = await executeWithRetry(() => server.prepareTransaction(tx));
   return {
     xdr: preparedTx.toXDR(),
     metadata: {
@@ -415,7 +417,7 @@ async function buildDepositUnsignedXdr(input: DepositRequest) {
 
   let sourceAccount;
   try {
-    sourceAccount = await server.getAccount(input.from);
+    sourceAccount = await executeWithRetry(() => server.getAccount(input.from));
   } catch {
     throw new RequestValidationError("from account not found on selected network");
   }
@@ -438,7 +440,7 @@ async function buildDepositUnsignedXdr(input: DepositRequest) {
     .setTimeout(300)
     .build();
 
-  const preparedTx = await server.prepareTransaction(tx);
+  const preparedTx = await executeWithRetry(() => server.prepareTransaction(tx));
   return {
     xdr: preparedTx.toXDR(),
     metadata: {
@@ -466,7 +468,7 @@ async function buildUpdateCollaboratorsUnsignedXdr(
 
   let sourceAccount;
   try {
-    sourceAccount = await server.getAccount(input.owner);
+    sourceAccount = await executeWithRetry(() => server.getAccount(input.owner));
   } catch {
     throw new RequestValidationError("owner account not found on selected network");
   }
@@ -489,7 +491,7 @@ async function buildUpdateCollaboratorsUnsignedXdr(
     .setTimeout(300)
     .build();
 
-  const preparedTx = await server.prepareTransaction(tx);
+  const preparedTx = await executeWithRetry(() => server.prepareTransaction(tx));
   return {
     xdr: preparedTx.toXDR(),
     metadata: {
@@ -514,7 +516,7 @@ async function buildUpdateMetadataUnsignedXdr(input: {
 
   let sourceAccount;
   try {
-    sourceAccount = await server.getAccount(input.owner);
+    sourceAccount = await executeWithRetry(() => server.getAccount(input.owner));
   } catch {
     throw new RequestValidationError("owner account not found on selected network");
   }
@@ -543,7 +545,7 @@ async function buildUpdateMetadataUnsignedXdr(input: {
     .setTimeout(300)
     .build();
 
-  const preparedTx = await server.prepareTransaction(tx);
+  const preparedTx = await executeWithRetry(() => server.prepareTransaction(tx));
   return {
     xdr: preparedTx.toXDR(),
     metadata: {
@@ -850,7 +852,7 @@ splitsRouter.post("/:projectId/distribute", async (req: Request, res: Response, 
     let sourceAccount;
     const sourceAddress = parsed.data?.sourceAddress || config.simulatorAccount;
     try {
-      sourceAccount = await server.getAccount(sourceAddress);
+      sourceAccount = await executeWithRetry(() => server.getAccount(sourceAddress));
     } catch {
       return res.status(400).json({
         error: "validation_error",
@@ -870,7 +872,7 @@ splitsRouter.post("/:projectId/distribute", async (req: Request, res: Response, 
       .setTimeout(300)
       .build();
 
-    const preparedTx = await server.prepareTransaction(tx);
+    const preparedTx = await executeWithRetry(() => server.prepareTransaction(tx));
 
     return res.status(200).json({
       xdr: preparedTx.toXDR(),
@@ -906,7 +908,7 @@ splitsRouter.get("/:projectId/claimable/:address", async (req: Request, res: Res
 
     let sourceAccount;
     try {
-      sourceAccount = await server.getAccount(config.simulatorAccount);
+      sourceAccount = await executeWithRetry(() => server.getAccount(config.simulatorAccount));
     } catch {
       return res.status(500).json({
         error: "server_error",
@@ -930,7 +932,7 @@ splitsRouter.get("/:projectId/claimable/:address", async (req: Request, res: Res
       .setTimeout(300)
       .build();
 
-    const simulated = await server.simulateTransaction(tx);
+    const simulated = await executeWithRetry(() => server.simulateTransaction(tx));
     const retval = "result" in simulated ? simulated.result?.retval : undefined;
     if (!retval) {
       return res.status(404).json({ error: "not_found", message: "Claimable info not found", requestId });
@@ -958,7 +960,7 @@ async function buildAllowTokenUnsignedXdr(input: AdminTokenRequest) {
 
   let sourceAccount;
   try {
-    sourceAccount = await server.getAccount(input.admin);
+    sourceAccount = await executeWithRetry(() => server.getAccount(input.admin));
   } catch {
     throw new RequestValidationError("admin account not found on selected network");
   }
@@ -976,7 +978,7 @@ async function buildAllowTokenUnsignedXdr(input: AdminTokenRequest) {
     .setTimeout(300)
     .build();
 
-  const preparedTx = await server.prepareTransaction(tx);
+  const preparedTx = await executeWithRetry(() => server.prepareTransaction(tx));
   return {
     xdr: preparedTx.toXDR(),
     metadata: {
@@ -996,7 +998,7 @@ async function buildDisallowTokenUnsignedXdr(input: AdminTokenRequest) {
 
   let sourceAccount;
   try {
-    sourceAccount = await server.getAccount(input.admin);
+    sourceAccount = await executeWithRetry(() => server.getAccount(input.admin));
   } catch {
     throw new RequestValidationError("admin account not found on selected network");
   }
@@ -1014,7 +1016,7 @@ async function buildDisallowTokenUnsignedXdr(input: AdminTokenRequest) {
     .setTimeout(300)
     .build();
 
-  const preparedTx = await server.prepareTransaction(tx);
+  const preparedTx = await executeWithRetry(() => server.prepareTransaction(tx));
   return {
     xdr: preparedTx.toXDR(),
     metadata: {
@@ -1124,7 +1126,7 @@ splitsRouter.get("/:projectId/history", async (req: Request, res: Response, next
 
     const { topicProjectId, roundTopic, paymentTopic } = buildHistoryTopicFilters(projectId);
 
-    const roundEventResponse = await server.getEvents({
+    const roundEventResponse = await executeWithRetry(() => server.getEvents({
       cursor,
       filters: [
         {
@@ -1136,7 +1138,7 @@ splitsRouter.get("/:projectId/history", async (req: Request, res: Response, next
       limit
     });
 
-    const paymentEventResponse = await server.getEvents({
+    const paymentEventResponse = await executeWithRetry(() => server.getEvents({
       cursor,
       filters: [
         {
