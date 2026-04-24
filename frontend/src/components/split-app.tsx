@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { rpc, Transaction, StrKey } from "@stellar/stellar-sdk";
 import { clsx } from "clsx";
 
@@ -20,7 +20,7 @@ import { isOwner } from "@/lib/address";
 import {
   signWithFreighter,
 } from "@/lib/freighter";
-import { type SplitProject } from "@/lib/stellar";
+import { type SplitProject, getExplorerUrl, getExplorerLabel } from "@/lib/stellar";
 import { useWallet } from "@/hooks/useWallet";
 import { notify } from "@/lib/notification";
 import { TokenSelector } from "./TypeSelector";
@@ -47,6 +47,15 @@ const SEEDED_PROJECT_IDS = [
   "cultural_resonance_05",
 ];
 
+interface TransactionReceipt {
+  hash: string;
+  action: "create" | "deposit" | "distribute" | "lock";
+  projectId: string;
+  title?: string;
+  amount?: string;
+  round?: number;
+}
+
 export function SplitApp() {
   const { wallet, connect, refresh } = useWallet();
 
@@ -57,6 +66,7 @@ export function SplitApp() {
   const [collaborators, setCollaborators] = useState<CollaboratorInput[]>(getInitialCollaborators());
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [txHash, setTxHash] = useState<string | null>(null);
+  const [receipt, setReceipt] = useState<TransactionReceipt | null>(null);
   const [createdProject, setCreatedProject] = useState<SplitProject | null>(
     null,
   );
@@ -237,7 +247,7 @@ export function SplitApp() {
     }
   }
 
-  function onWizardNext() {
+  function _onWizardNext() {
     if (createStep === 1 && isStep1Valid) {
       setCreateStep(2);
     } else if (createStep === 2 && isStep2Valid) {
@@ -247,13 +257,13 @@ export function SplitApp() {
     }
   }
 
-  function onWizardBack() {
+  function _onWizardBack() {
     if (createStep > 1) {
       setCreateStep(createStep - 1);
     }
   }
 
-  function onWizardReset() {
+  function _onWizardReset() {
     setCreateStep(1);
     setProjectId("");
     setTitle("");
@@ -261,7 +271,86 @@ export function SplitApp() {
     setToken("");
     setCollaborators(getInitialCollaborators());
     setTxHash(null);
+    setReceipt(null);
     setCreatedProject(null);
+  }
+
+  function TransactionReceiptView({ receipt, network }: { receipt: TransactionReceipt; network: string | null }) {
+    const explorerUrl = getExplorerUrl(receipt.hash, network);
+    const explorerLabel = getExplorerLabel(network);
+
+    const actionConfig = {
+      create: {
+        title: "Project Created Successfully",
+        icon: (
+          <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
+        ),
+        summary: `Project "${receipt.title}" initialized.`,
+      },
+      deposit: {
+        title: "Deposit Successful",
+        icon: (
+          <path strokeLinecap="round" strokeLinejoin="round" d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
+        ),
+        summary: `Deposited ${receipt.amount} tokens to ${receipt.projectId}.`,
+      },
+      distribute: {
+        title: "Distribution Successful",
+        icon: (
+          <path strokeLinecap="round" strokeLinejoin="round" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4" />
+        ),
+        summary: `Round #${receipt.round} completed for ${receipt.projectId}.`,
+      },
+      lock: {
+        title: "Project Locked Permanently",
+        icon: (
+          <path strokeLinecap="round" strokeLinejoin="round" d="M16.5 10.5V6.75a4.5 4.5 0 10-9 0v3.75m-.75 11.25h10.5a2.25 2.25 0 002.25-2.25v-6.75a2.25 2.25 0 00-2.25-2.25H6.75a2.25 2.25 0 00-2.25 2.25v6.75a2.25 2.25 0 002.25 2.25z" />
+        ),
+        summary: `Configuration for ${receipt.projectId} is now immutable.`,
+      },
+    }[receipt.action];
+
+    return (
+      <div className="mt-8 rounded-2xl border border-greenBright/20 bg-greenBright/5 p-6 animate-in fade-in slide-in-from-bottom-4">
+        <div className="flex items-start gap-4">
+          <div className="mt-1 flex h-10 w-10 items-center justify-center rounded-full bg-greenBright/10">
+            <svg
+              className="h-6 w-6 text-greenBright"
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+              strokeWidth={2.5}
+            >
+              {actionConfig.icon}
+            </svg>
+          </div>
+          <div className="space-y-1">
+            <h3 className="text-sm font-bold text-greenBright uppercase tracking-widest">
+              {actionConfig.title}
+            </h3>
+            <p className="text-[11px] text-muted-foreground font-medium italic opacity-90">
+              {actionConfig.summary}
+            </p>
+            <div className="pt-2 space-y-1">
+              <p className="font-mono text-[9px] text-muted break-all opacity-60">
+                Tx: {receipt.hash}
+              </p>
+              <a
+                href={explorerUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1.5 text-[10px] font-bold text-greenBright underline underline-offset-4 hover:text-white transition-colors"
+              >
+                Verify on {explorerLabel}
+                <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M13.5 6H5.25A2.25 2.25 0 003 8.25v10.5A2.25 2.25 0 005.25 21h10.5A2.25 2.25 0 0018 18.75V10.5m-10.5 6L21 3m0 0h-5.25M21 3v5.25" />
+                </svg>
+              </a>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
   }
 
   function updateCollaborator(id: string, patch: Partial<CollaboratorInput>) {
@@ -302,6 +391,7 @@ export function SplitApp() {
     }));
     setIsSubmitting(true);
     setTxHash(null);
+    setReceipt(null);
     try {
       const buildResponse = await buildCreateSplitXdr({
         owner: wallet.address,
@@ -332,6 +422,14 @@ export function SplitApp() {
         );
       }
       setTxHash(submitResponse.hash ?? null);
+      if (submitResponse.hash) {
+        setReceipt({
+          hash: submitResponse.hash,
+          action: "create",
+          projectId: projectId.trim(),
+          title: title.trim(),
+        });
+      }
       notify.success("Split project created successfully.");
 
       // Fetch and store the created project details
@@ -388,6 +486,7 @@ export function SplitApp() {
     if (!fetchedProject || !wallet.address) return;
     setIsSubmitting(true);
     setTxHash(null);
+    setReceipt(null);
     setShowDistributeModal(false);
     try {
       const { xdr, metadata } = await buildDistributeXdr(
@@ -415,6 +514,14 @@ export function SplitApp() {
         );
       }
       setTxHash(submitResponse.hash ?? null);
+      if (submitResponse.hash) {
+        setReceipt({
+          hash: submitResponse.hash,
+          action: "distribute",
+          projectId: fetchedProject.projectId,
+          round: fetchedProject.distributionRound + 1,
+        });
+      }
       notify.success("Distribution initiated successfully.");
       await onFetchProject();
     } catch (error) {
@@ -493,6 +600,7 @@ export function SplitApp() {
 
     setIsLocking(true);
     setTxHash(null);
+    setReceipt(null);
     try {
       const { xdr, metadata } = await buildLockProjectXdr(fetchedProject.projectId, wallet.address);
       const signedTxXdr = await signWithFreighter(xdr, metadata.networkPassphrase);
@@ -507,6 +615,13 @@ export function SplitApp() {
       }
 
       setTxHash(submitResponse.hash ?? null);
+      if (submitResponse.hash) {
+        setReceipt({
+          hash: submitResponse.hash,
+          action: "lock",
+          projectId: fetchedProject.projectId,
+        });
+      }
       setFetchedProject((prev) => (prev ? { ...prev, locked: true } : prev));
       setShowLockModal(false);
       notify.success("Project locked permanently.");
@@ -580,6 +695,7 @@ export function SplitApp() {
 
     setIsDepositing(true);
     setTxHash(null);
+    setReceipt(null);
     try {
       const amountInStroops = Math.floor(Number.parseFloat(depositAmount) * 10_000_000);
       const { xdr, metadata } = await buildDepositXdr(
@@ -599,6 +715,14 @@ export function SplitApp() {
       }
 
       setTxHash(submitResponse.hash ?? null);
+      if (submitResponse.hash) {
+        setReceipt({
+          hash: submitResponse.hash,
+          action: "deposit",
+          projectId: fetchedProject.projectId,
+          amount: depositAmount,
+        });
+      }
       setShowDepositModal(false);
       setDepositAmount("");
       notify.success("Deposit successful!");
@@ -613,7 +737,7 @@ export function SplitApp() {
   };
 
   // Phase 3: Fetch projects list from seeded IDs
-  const onFetchProjectsList = async () => {
+  const onFetchProjectsList = useCallback(async () => {
     setIsLoadingProjectsList(true);
     try {
       const projects: SplitProject[] = [];
@@ -635,7 +759,7 @@ export function SplitApp() {
     } finally {
       setIsLoadingProjectsList(false);
     }
-  };
+  }, []);
 
   const onFetchDashboardData = async () => {
     setIsLoadingDashboard(true);
@@ -675,7 +799,15 @@ export function SplitApp() {
     } else if (activeTab === "dashboard" && dashboardData.length === 0 && !isLoadingDashboard) {
       void onFetchDashboardData();
     }
-  }, [activeTab, wallet.connected]);
+  }, [
+    activeTab,
+    dashboardData.length,
+    isLoadingDashboard,
+    isLoadingProjectsList,
+    onFetchDashboardData,
+    onFetchProjectsList,
+    projectsList.length
+  ]);
 
   return (
     <main className="min-h-screen px-6 py-12 md:px-12 selection:bg-greenBright/10 selection:text-greenBright">
@@ -1147,42 +1279,8 @@ export function SplitApp() {
               </button>
             </div>
 
-            {txHash && (
-              <div className="mt-8 rounded-2xl border border-greenBright/20 bg-greenBright/5 p-6 animate-in fade-in slide-in-from-bottom-4">
-                <div className="flex items-start gap-4">
-                  <div className="mt-1 flex h-10 w-10 items-center justify-center rounded-full bg-greenBright/10">
-                    <svg
-                      className="h-6 w-6 text-greenBright"
-                      fill="none"
-                      viewBox="0 0 24 24"
-                      stroke="currentColor"
-                      strokeWidth={2.5}
-                    >
-                      <path
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        d="M5 13l4 4L19 7"
-                      />
-                    </svg>
-                  </div>
-                  <div className="space-y-1">
-                    <h3 className="text-sm font-bold text-greenBright uppercase tracking-widest">
-                      Project Created Successfully
-                    </h3>
-                    <p className="font-mono text-[10px] text-muted break-all opacity-80">
-                      Hash: {txHash}
-                    </p>
-                    <a
-                      href={`https://stellar.expert/explorer/testnet/tx/${txHash}`}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="inline-block pt-2 text-[10px] font-bold text-greenBright underline underline-offset-4 hover:text-white"
-                    >
-                      View on Explorer →
-                    </a>
-                  </div>
-                </div>
-              </div>
+            {receipt && receipt.action === "create" && (
+              <TransactionReceiptView receipt={receipt} network={wallet.network} />
             )}
 
             {createdProject && (
@@ -1548,12 +1646,12 @@ export function SplitApp() {
                                 )}
                               </p>
                               <a
-                                href={`https://stellar.expert/explorer/testnet/tx/${item.txHash}`}
+                                href={getExplorerUrl(item.txHash, wallet.network)}
                                 target="_blank"
                                 rel="noopener noreferrer"
                                 className="text-[9px] font-bold text-greenBright/40 hover:text-greenBright transition-colors uppercase tracking-widest mt-1"
                               >
-                                Verify Transaction →
+                                Verify on {getExplorerLabel(wallet.network)} →
                               </a>
                             </div>
                           </div>
@@ -1598,35 +1696,8 @@ export function SplitApp() {
                       </p>
                     )}
 
-                    {txHash && (
-                      <div className="mt-6 rounded-2xl border border-greenBright/20 bg-greenBright/5 p-5 animate-in fade-in slide-in-from-bottom-4">
-                        <div className="flex items-start gap-4">
-                          <div className="mt-0.5 flex h-8 w-8 items-center justify-center rounded-full bg-greenBright/10">
-                            <svg className="h-5 w-5 text-greenBright" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
-                              <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
-                            </svg>
-                          </div>
-                          <div className="space-y-1">
-                            <h4 className="text-xs font-bold text-greenBright uppercase tracking-widest">
-                              Distribution Successful
-                            </h4>
-                            <p className="text-[10px] text-muted">
-                              Round #{fetchedProject.distributionRound + 1} completed
-                            </p>
-                            <p className="font-mono text-[10px] text-muted break-all opacity-80">
-                              Tx: {txHash}
-                            </p>
-                            <a
-                              href={`https://stellar.expert/explorer/testnet/tx/${txHash}`}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="inline-block pt-1 text-[10px] font-bold text-greenBright underline underline-offset-4 hover:text-white"
-                            >
-                              View on Explorer →
-                            </a>
-                          </div>
-                        </div>
-                      </div>
+                    {receipt && (receipt.action === "distribute" || receipt.action === "lock" || receipt.action === "deposit") && (
+                      <TransactionReceiptView receipt={receipt} network={wallet.network} />
                     )}
                   </div>
                 </div>
@@ -1811,12 +1882,12 @@ export function SplitApp() {
                                   )}
                                 </p>
                                 <a
-                                  href={`https://stellar.expert/explorer/testnet/tx/${item.txHash}`}
+                                  href={getExplorerUrl(item.txHash, wallet.network)}
                                   target="_blank"
                                   rel="noopener noreferrer"
                                   className="text-[9px] font-bold text-greenBright/40 hover:text-greenBright transition-colors uppercase tracking-widest mt-1"
                                 >
-                                  Verify Transaction →
+                                  Verify on {getExplorerLabel(wallet.network)} →
                                 </a>
                               </div>
                             </div>
@@ -1837,6 +1908,10 @@ export function SplitApp() {
                       </button>
                       {!wallet.connected && <p className="text-center text-[10px] font-bold text-red-500 uppercase tracking-widest">Connect wallet to distribute</p>}
                       {Number(fetchedProject.balance) <= 0 && <p className="text-center text-[10px] font-bold text-muted uppercase tracking-widest">No funds available to distribute</p>}
+                      
+                      {receipt && (receipt.action === "distribute" || receipt.action === "lock" || receipt.action === "deposit") && (
+                        <TransactionReceiptView receipt={receipt} network={wallet.network} />
+                      )}
                     </div>
                   </div>
                 </div>

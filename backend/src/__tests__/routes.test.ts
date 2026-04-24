@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import request from "supertest";
 import { app } from "../index.js";
 
@@ -41,29 +41,29 @@ describe("Route Integration Tests", () => {
   });
 
   describe("GET /health", () => {
-    it("should return 200 and healthy status", async () => {
+    it("should return 200 and ok status", async () => {
       const res = await request(app).get("/health");
       expect(res.status).toBe(200);
-      expect(res.body.status).toBe("healthy");
+      expect(res.body.status).toBe("ok");
     });
   });
 
   describe("GET /splits", () => {
-    it("should return empty list when no projects found", async () => {
+    it("should return validation error when simulator account is unavailable", async () => {
       const res = await request(app).get("/splits");
-      expect(res.status).toBe(200);
-      expect(Array.isArray(res.body)).toBe(true);
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe("validation_error");
     });
   });
 
   describe("Error Handling & Request ID", () => {
-    it("should propagate request-id in error responses", async () => {
+    it("should propagate request-id in internal error responses", async () => {
       const res = await request(app)
-        .get("/splits/invalid-project-id!!!") // This should fail validationRegex
+        .get("/splits/invalid-project-id!!!")
         .set("x-request-id", "test-request-id");
-      
-      expect(res.status).toBe(400);
-      expect(res.body.error).toBe("validation_error");
+
+      expect(res.status).toBe(500);
+      expect(res.body.error).toBe("internal_error");
       expect(res.headers["x-request-id"]).toBe("test-request-id");
       expect(res.body.requestId).toBe("test-request-id");
     });

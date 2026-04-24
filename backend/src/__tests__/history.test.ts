@@ -94,10 +94,11 @@ describe("Split History Precise Filtering", () => {
     }
     
     expect(res.status).toBe(200);
-    expect(res.body).toHaveLength(2);
-    expect(res.body[0].type).toBe("payment"); // Sorted by ledgerCloseTime desc
-    expect(res.body[1].type).toBe("round");
-    expect(res.body[0].recipient).toBe("GABC");
-    expect(res.body[1].round).toBe(1);
+    expect(res.body.items).toHaveLength(2);
+    expect(res.body.items[0].type).toBe("payment"); // Sorted by ledgerCloseTime desc
+    expect(res.body.items[1].type).toBe("round");
+    expect(res.body.items[0].recipient).toBe("GABC");
+    expect(res.body.items[1].round).toBe(1);
+    expect(res.body.nextCursor).toBeNull();
   });
 });

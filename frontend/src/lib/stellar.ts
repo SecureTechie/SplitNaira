@@ -23,6 +23,19 @@ export function getHorizonUrl(network: StellarNetwork) {
     : "https://horizon-testnet.stellar.org";
 }
 
+export function getExplorerUrl(hash: string, network: StellarNetwork | string | null) {
+  const isMainnet = network === "mainnet" || network === "public";
+  const baseUrl = isMainnet
+    ? "https://stellar.expert/explorer/public"
+    : "https://stellar.expert/explorer/testnet";
+  return `${baseUrl}/tx/${hash}`;
+}
+
+export function getExplorerLabel(network: StellarNetwork | string | null) {
+  const isMainnet = network === "mainnet" || network === "public";
+  return isMainnet ? "Stellar.expert (Mainnet)" : "Stellar.expert (Testnet)";
+}
+
 export function formatBasisPoints(bps: number) {
   return `${(bps / 100).toFixed(2)}%`;
 }
