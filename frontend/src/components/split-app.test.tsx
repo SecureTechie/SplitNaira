@@ -6,6 +6,7 @@ import { SplitApp } from "./split-app";
 import { ToastProvider } from "./toast-provider";
 
 const mocks = vi.hoisted(() => ({
+  mockUseWallet: vi.fn(),
   mockGetFreighterWalletState: vi.fn(),
   mockConnectFreighter: vi.fn(),
   mockSignWithFreighter: vi.fn(),
@@ -27,6 +28,10 @@ vi.mock("@/lib/freighter", () => ({
   getFreighterWalletState: mocks.mockGetFreighterWalletState,
   connectFreighter: mocks.mockConnectFreighter,
   signWithFreighter: mocks.mockSignWithFreighter
+}));
+
+vi.mock("@/hooks/useWallet", () => ({
+  useWallet: mocks.mockUseWallet
 }));
 
 vi.mock("@/lib/api", () => ({
@@ -103,6 +108,15 @@ async function loadProject() {
 describe("SplitApp lock project flow", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.mockUseWallet.mockReturnValue({
+      wallet: {
+        connected: true,
+        address: "GOWNER123",
+        network: "testnet"
+      },
+      connect: vi.fn(),
+      refresh: vi.fn()
+    });
     mocks.mockGetFreighterWalletState.mockResolvedValue({
       connected: true,
       address: "GOWNER123",
@@ -139,6 +153,11 @@ describe("SplitApp lock project flow", () => {
   });
 
   it("hides lock button for non-owner", async () => {
+    mocks.mockUseWallet.mockReturnValue({
+      wallet: { connected: true, address: "GNOTOWNER", network: "testnet" },
+      connect: vi.fn(),
+      refresh: vi.fn()
+    });
     mocks.mockGetFreighterWalletState.mockResolvedValue({
       connected: true,
       address: "GNOTOWNER",
@@ -209,6 +228,15 @@ describe("SplitApp lock project flow", () => {
 describe("Issue #174: owner gating and lock lifecycle", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.mockUseWallet.mockReturnValue({
+      wallet: {
+        connected: true,
+        address: "GOWNER123",
+        network: "testnet"
+      },
+      connect: vi.fn(),
+      refresh: vi.fn()
+    });
     mocks.mockGetFreighterWalletState.mockResolvedValue({
       connected: true,
       address: "GOWNER123",
@@ -228,6 +256,11 @@ describe("Issue #174: owner gating and lock lifecycle", () => {
   });
 
   it("non-owner without wallet connection cannot see lock button and sees no locked banner on unlocked project", async () => {
+    mocks.mockUseWallet.mockReturnValue({
+      wallet: { connected: false, address: null, network: null },
+      connect: vi.fn(),
+      refresh: vi.fn()
+    });
     mocks.mockGetFreighterWalletState.mockResolvedValue({
       connected: false,
       address: null,
@@ -240,6 +273,11 @@ describe("Issue #174: owner gating and lock lifecycle", () => {
   });
 
   it("non-owner with wallet connected to a different address cannot lock", async () => {
+    mocks.mockUseWallet.mockReturnValue({
+      wallet: { connected: true, address: "GATTACKER_NOT_OWNER", network: "testnet" },
+      connect: vi.fn(),
+      refresh: vi.fn()
+    });
     mocks.mockGetFreighterWalletState.mockResolvedValue({
       connected: true,
       address: "GATTACKER_NOT_OWNER",
@@ -283,6 +321,11 @@ describe("Issue #174: owner gating and lock lifecycle", () => {
   });
 
   it("even a non-owner viewing a locked project sees the locked banner (observer view)", async () => {
+    mocks.mockUseWallet.mockReturnValue({
+      wallet: { connected: true, address: "GRANDOM_USER", network: "testnet" },
+      connect: vi.fn(),
+      refresh: vi.fn()
+    });
     mocks.mockGetFreighterWalletState.mockResolvedValue({
       connected: true,
       address: "GRANDOM_USER",
@@ -376,6 +419,15 @@ describe("SplitApp admin allowlist flow", () => {
 describe("SplitApp distribute flow", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.mockUseWallet.mockReturnValue({
+      wallet: {
+        connected: true,
+        address: "GOWNER123",
+        network: "testnet"
+      },
+      connect: vi.fn(),
+      refresh: vi.fn()
+    });
     mocks.mockGetFreighterWalletState.mockResolvedValue({
       connected: true,
       address: "GOWNER123",
@@ -439,6 +491,11 @@ describe("SplitApp distribute flow", () => {
   });
 
   it("disables distribute button when wallet not connected", async () => {
+    mocks.mockUseWallet.mockReturnValue({
+      wallet: { connected: false, address: null, network: null },
+      connect: vi.fn(),
+      refresh: vi.fn()
+    });
     mocks.mockGetFreighterWalletState.mockResolvedValue({
       connected: false,
       address: null,
@@ -455,5 +512,72 @@ describe("SplitApp distribute flow", () => {
     await loadProject();
     expect(screen.getByRole("button", { name: "Trigger Distribution" })).toHaveProperty("disabled", true);
     expect(screen.getByText("No funds available to distribute")).toBeTruthy();
+  });
+});
+
+describe("SplitApp async state handling", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.mockUseWallet.mockReturnValue({
+      wallet: {
+        connected: true,
+        address: "GOWNER123",
+        network: "testnet"
+      },
+      connect: vi.fn(),
+      refresh: vi.fn()
+    });
+    mocks.mockGetFreighterWalletState.mockResolvedValue({
+      connected: true,
+      address: "GOWNER123",
+      network: "testnet"
+    });
+    mocks.mockGetSplit.mockResolvedValue(baseProject);
+    mocks.mockGetProjectHistory.mockResolvedValue({ items: [], nextCursor: null });
+  });
+
+  it("keeps prior project visible and marks it stale when refresh fails", async () => {
+    const user = await loadProject();
+    mocks.mockGetSplit.mockRejectedValueOnce(new Error("network down"));
+
+    await user.click(screen.getByRole("button", { name: "Fetch Stats" }));
+
+    expect(await screen.findByText(/Showing stale project data/i)).toBeTruthy();
+    expect(screen.getByText("Project One")).toBeTruthy();
+  });
+
+  it("shows history retry when history refresh fails after existing data", async () => {
+    mocks.mockGetProjectHistory
+      .mockResolvedValueOnce({
+        items: [
+          {
+            id: "h1",
+            type: "round",
+            round: 1,
+            amount: "100",
+            recipient: "",
+            ledgerCloseTime: 1700000000,
+            txHash: "TX1"
+          }
+        ],
+        nextCursor: null
+      })
+      .mockRejectedValueOnce(new Error("history unavailable"));
+
+    const user = await loadProject();
+    await user.click(screen.getByRole("button", { name: "Fetch Stats" }));
+
+    expect(await screen.findAllByRole("button", { name: "Retry History" })).toBeTruthy();
+    expect(screen.getAllByText(/Showing stale history data/i).length).toBeGreaterThan(0);
+  });
+
+  it("shows projects empty retry state when list requests fail", async () => {
+    mocks.mockGetSplit.mockRejectedValue(new Error("offline"));
+    const user = userEvent.setup();
+    renderSplitApp();
+
+    await user.click(screen.getByRole("button", { name: "Projects" }));
+
+    expect(await screen.findByText(/Could not load projects\. Retry refresh\./i)).toBeTruthy();
   });
 });

@@ -1166,6 +1166,84 @@ interface AdminTokenRequest {
   token: string;
 }
 
+const pauseDistributionsSchema = z.object({
+  admin: stellarAddressSchema.describe("admin")
+});
+
+interface PauseDistributionsRequest {
+  admin: string;
+}
+
+async function buildPauseDistributionsUnsignedXdr(input: PauseDistributionsRequest) {
+  const config = loadStellarConfig();
+  const server = getStellarRpcServer();
+
+  let sourceAccount;
+  try {
+    sourceAccount = await executeWithRetry(() => server.getAccount(input.admin));
+  } catch {
+    throw new RequestValidationError("admin account not found on selected network");
+  }
+
+  const adminAddress = Address.fromString(input.admin);
+  const contract = new Contract(config.contractId);
+  const tx = new TransactionBuilder(sourceAccount, {
+    fee: BASE_FEE,
+    networkPassphrase: config.networkPassphrase
+  })
+    .addOperation(contract.call("pause_distributions", adminAddress.toScVal()))
+    .setTimeout(300)
+    .build();
+
+  const preparedTx = await executeWithRetry(() => server.prepareTransaction(tx));
+  return {
+    xdr: preparedTx.toXDR(),
+    metadata: {
+      contractId: config.contractId,
+      networkPassphrase: config.networkPassphrase,
+      sourceAccount: input.admin,
+      sequenceNumber: preparedTx.sequence,
+      fee: preparedTx.fee,
+      operation: "pause_distributions"
+    }
+  };
+}
+
+async function buildUnpauseDistributionsUnsignedXdr(input: PauseDistributionsRequest) {
+  const config = loadStellarConfig();
+  const server = getStellarRpcServer();
+
+  let sourceAccount;
+  try {
+    sourceAccount = await executeWithRetry(() => server.getAccount(input.admin));
+  } catch {
+    throw new RequestValidationError("admin account not found on selected network");
+  }
+
+  const adminAddress = Address.fromString(input.admin);
+  const contract = new Contract(config.contractId);
+  const tx = new TransactionBuilder(sourceAccount, {
+    fee: BASE_FEE,
+    networkPassphrase: config.networkPassphrase
+  })
+    .addOperation(contract.call("unpause_distributions", adminAddress.toScVal()))
+    .setTimeout(300)
+    .build();
+
+  const preparedTx = await executeWithRetry(() => server.prepareTransaction(tx));
+  return {
+    xdr: preparedTx.toXDR(),
+    metadata: {
+      contractId: config.contractId,
+      networkPassphrase: config.networkPassphrase,
+      sourceAccount: input.admin,
+      sequenceNumber: preparedTx.sequence,
+      fee: preparedTx.fee,
+      operation: "unpause_distributions"
+    }
+  };
+}
+
 async function buildAllowTokenUnsignedXdr(input: AdminTokenRequest) {
   const config = loadStellarConfig();
   const server = getStellarRpcServer();
@@ -1288,6 +1366,68 @@ splitsRouter.post("/admin/disallow-token", async (req: Request, res: Response, n
 
     try {
       const result = await buildDisallowTokenUnsignedXdr(parsed.data);
+      return res.status(200).json(result);
+    } catch (error) {
+      if (error instanceof RequestValidationError) {
+        return res.status(400).json({
+          error: "validation_error",
+          message: error.message,
+          requestId
+        });
+      }
+      throw error;
+    }
+  } catch (error) {
+    return next(error);
+  }
+});
+
+splitsRouter.post("/admin/pause-distributions", async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const requestId = res.locals.requestId;
+    const parsed = pauseDistributionsSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({
+        error: "validation_error",
+        message: "Invalid request payload.",
+        details: parsed.error.flatten(),
+        requestId
+      });
+    }
+
+    try {
+      const result = await buildPauseDistributionsUnsignedXdr(parsed.data);
+      return res.status(200).json(result);
+    } catch (error) {
+      if (error instanceof RequestValidationError) {
+        return res.status(400).json({
+          error: "validation_error",
+          message: error.message,
+          requestId
+        });
+      }
+      throw error;
+    }
+  } catch (error) {
+    return next(error);
+  }
+});
+
+splitsRouter.post("/admin/unpause-distributions", async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const requestId = res.locals.requestId;
+    const parsed = pauseDistributionsSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({
+        error: "validation_error",
+        message: "Invalid request payload.",
+        details: parsed.error.flatten(),
+        requestId
+      });
+    }
+
+    try {
+      const result = await buildUnpauseDistributionsUnsignedXdr(parsed.data);
       return res.status(200).json(result);
     } catch (error) {
       if (error instanceof RequestValidationError) {

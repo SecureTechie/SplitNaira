@@ -1863,3 +1863,104 @@ fn test_non_owner_cannot_update_collaborators() {
         5000u32
     );
 }
+
+// ============================================================
+//  ISSUE #170 — RELEASE-GRADE ADMIN/PAUSE/RECOVERY INTEGRATION TESTS
+// ============================================================
+
+#[test]
+fn test_admin_rotation_pause_allowlist_and_recovery_preserve_project_invariants() {
+    let (env, _token_admin, token_allowed) = create_test_env();
+    let blocked_token_admin = Address::generate(&env);
+    let token_blocked = env.register_stellar_asset_contract(blocked_token_admin);
+    let contract_id = env.register_contract(None, SplitNairaContract);
+    let client = SplitNairaContractClient::new(&env, &contract_id);
+
+    let admin_a = Address::generate(&env);
+    let admin_b = Address::generate(&env);
+    let owner = Address::generate(&env);
+    let funder = Address::generate(&env);
+    let donor = Address::generate(&env);
+    let recovery_to = Address::generate(&env);
+    let alice = Address::generate(&env);
+    let bob = Address::generate(&env);
+
+    // Set and rotate admin, then verify only rotated admin has control.
+    client.set_admin(&admin_a);
+    client.set_admin(&admin_b);
+    assert_eq!(client.get_admin().unwrap(), admin_b.clone());
+    assert_eq!(
+        client.try_allow_token(&admin_a, &token_allowed),
+        Err(Ok(SplitError::Unauthorized))
+    );
+
+    // Enable allowlist and permit only token_allowed.
+    client.allow_token(&admin_b, &token_allowed);
+    assert_eq!(client.get_allowed_token_count(), 1);
+    assert_eq!(client.is_token_allowed(&token_allowed), true);
+    assert_eq!(client.is_token_allowed(&token_blocked), false);
+
+    let collabs = make_collaborators(
+        &env,
+        Vec::from_slice(&env, &[alice.clone(), bob.clone()]),
+        Vec::from_slice(&env, &[5000u32, 5000u32]),
+    );
+
+    let blocked_result = client.try_create_project(
+        &owner,
+        &Symbol::new(&env, "blocked_allowlist"),
+        &String::from_str(&env, "Blocked Allowlist"),
+        &String::from_str(&env, "music"),
+        &token_blocked,
+        &collabs.clone(),
+    );
+    assert_eq!(blocked_result, Err(Ok(SplitError::TokenNotAllowed)));
+
+    let project_id = Symbol::new(&env, "ops_invariants");
+    client.create_project(
+        &owner,
+        &project_id,
+        &String::from_str(&env, "Ops Invariants"),
+        &String::from_str(&env, "music"),
+        &token_allowed,
+        &collabs,
+    );
+
+    // Deposit project funds, then pause distributions.
+    deposit_to_project(
+        &env,
+        &client,
+        &token_allowed,
+        &project_id,
+        &funder,
+        1_000_0000000i128,
+    );
+    let balance_before_pause = client.get_balance(&project_id);
+    client.pause_distributions(&admin_b);
+    assert_eq!(client.is_distributions_paused(), true);
+    assert_eq!(
+        client.try_distribute(&project_id),
+        Err(Ok(SplitError::DistributionsPaused))
+    );
+    // Invariant: pause cannot mutate accounted project balances/round metadata.
+    assert_eq!(client.get_balance(&project_id), balance_before_pause);
+    assert_eq!(client.get_project(&project_id).unwrap().distribution_round, 0);
+
+    // Send unallocated funds and recover some without affecting project ledger.
+    let token_admin_client = token::StellarAssetClient::new(&env, &token_allowed);
+    token_admin_client.mint(&donor, &300_0000000i128);
+    let token_client = token::Client::new(&env, &token_allowed);
+    token_client.transfer(&donor, &contract_id, &300_0000000i128);
+    assert_eq!(client.get_unallocated_balance(&token_allowed), 300_0000000i128);
+    client.withdraw_unallocated(&admin_b, &token_allowed, &recovery_to, &200_0000000i128);
+    assert_eq!(client.get_balance(&project_id), balance_before_pause);
+    assert_eq!(token_client.balance(&recovery_to), 200_0000000i128);
+
+    // Unpause and distribute to prove project flow still behaves correctly.
+    client.unpause_distributions(&admin_b);
+    client.distribute(&project_id);
+    let project = client.get_project(&project_id).unwrap();
+    assert_eq!(project.distribution_round, 1);
+    assert_eq!(project.total_distributed, 1_000_0000000i128);
+    assert_eq!(client.get_balance(&project_id), 0);
+}

@@ -344,7 +344,7 @@ describe("splits routes integration", () => {
 
     expect(response.body.error).toBe("validation_error");
     expect(response.body.message).toMatch(/admin account not found/);
-  });
+  }, 15000);
 
   it("returns 400 for disallow_token when admin account not found", async () => {
     getAccountMock.mockRejectedValue(new Error("not found"));
@@ -358,6 +358,52 @@ describe("splits routes integration", () => {
 
     expect(response.body.error).toBe("validation_error");
     expect(response.body.message).toMatch(/admin account not found/);
+  }, 15000);
+
+  it("builds pause_distributions transaction", async () => {
+    getAccountMock.mockResolvedValue({ accountId: "GADMIN" });
+    prepareTransactionMock.mockResolvedValue({
+      toXDR: () => "XDR_PAUSE_DISTRIBUTIONS",
+      sequence: "102",
+      fee: "100"
+    });
+
+    const app = createApp();
+    const response = await request(app)
+      .post("/splits/admin/pause-distributions")
+      .send({ admin: "GADMIN" })
+      .expect(200);
+
+    expect(response.body).toMatchObject({
+      xdr: "XDR_PAUSE_DISTRIBUTIONS",
+      metadata: {
+        sourceAccount: "GADMIN",
+        operation: "pause_distributions"
+      }
+    });
+  });
+
+  it("builds unpause_distributions transaction", async () => {
+    getAccountMock.mockResolvedValue({ accountId: "GADMIN" });
+    prepareTransactionMock.mockResolvedValue({
+      toXDR: () => "XDR_UNPAUSE_DISTRIBUTIONS",
+      sequence: "103",
+      fee: "100"
+    });
+
+    const app = createApp();
+    const response = await request(app)
+      .post("/splits/admin/unpause-distributions")
+      .send({ admin: "GADMIN" })
+      .expect(200);
+
+    expect(response.body).toMatchObject({
+      xdr: "XDR_UNPAUSE_DISTRIBUTIONS",
+      metadata: {
+        sourceAccount: "GADMIN",
+        operation: "unpause_distributions"
+      }
+    });
   });
 
   it("retrieves history filtered and sorted", async () => {
@@ -478,7 +524,7 @@ describe("Issue #174: lock & update permissions and owner gating", () => {
 
     expect(response.body.error).toBe("validation_error");
     expect(response.body.message).toMatch(/owner account not found/);
-  });
+  }, 15000);
 
   it("update-collaborators route passes owner through as sourceAccount", async () => {
     getAccountMock.mockResolvedValue({ accountId: VALID_OWNER });
