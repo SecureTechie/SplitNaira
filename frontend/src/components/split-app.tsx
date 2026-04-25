@@ -20,6 +20,9 @@ import {
   type ProjectHistoryItem,
   getTokenAllowlist,
   type TokenAllowlistState,
+  getUnallocatedBalance,
+  buildWithdrawUnallocatedXdr,
+  type UnallocatedBalanceState,
 } from "@/lib/api";
 import { isOwner } from "@/lib/address";
 import {
@@ -213,6 +216,17 @@ export function SplitApp() {
   const [isUpdatingAllowlist, setIsUpdatingAllowlist] = useState(false);
   const [lastAllowlistTx, setLastAllowlistTx] = useState<AllowlistActionResult | null>(null);
 
+  // Issue #166: Unallocated token recovery console state
+  const [recoveryTokenInput, setRecoveryTokenInput] = useState("");
+  const [recoveryToInput, setRecoveryToInput] = useState("");
+  const [recoveryAmountInput, setRecoveryAmountInput] = useState("");
+  const [unallocatedBalance, setUnallocatedBalance] = useState<UnallocatedBalanceState | null>(null);
+  const [isLoadingUnallocated, setIsLoadingUnallocated] = useState(false);
+  const [unallocatedError, setUnallocatedError] = useState<string | null>(null);
+  const [showRecoveryConfirm, setShowRecoveryConfirm] = useState(false);
+  const [isSubmittingRecovery, setIsSubmittingRecovery] = useState(false);
+  const [lastRecoveryTxHash, setLastRecoveryTxHash] = useState<string | null>(null);
+
   const totalBasisPoints = useMemo(
     () =>
       collaborators.reduce((sum, collaborator) => {
@@ -395,6 +409,75 @@ export function SplitApp() {
     // Note: useWallet doesn't have a disconnect method yet as Freighter doesn't support it well,
     // but we can refresh to get current state or just notify.
     notify.info("Freighter does not support programmatic disconnect. Use the extension to revoke access.");
+  }
+
+  // Issue #166: Inspect unallocated balance for a token
+  async function onInspectUnallocated() {
+    if (!recoveryTokenInput.trim()) {
+      notify.error("Token address is required.");
+      return;
+    }
+    setIsLoadingUnallocated(true);
+    setUnallocatedError(null);
+    setUnallocatedBalance(null);
+    setShowRecoveryConfirm(false);
+    setLastRecoveryTxHash(null);
+    try {
+      const data = await getUnallocatedBalance(recoveryTokenInput.trim());
+      setUnallocatedBalance(data);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to fetch unallocated balance.";
+      setUnallocatedError(message);
+    } finally {
+      setIsLoadingUnallocated(false);
+    }
+  }
+
+  // Issue #166: Submit a recovery transaction after operator confirmation
+  async function onConfirmRecovery() {
+    if (!wallet.address || !unallocatedBalance) return;
+    const amount = Number(recoveryAmountInput.trim());
+    if (!recoveryToInput.trim() || !Number.isFinite(amount) || amount <= 0) {
+      notify.error("Destination address and a valid positive amount are required.");
+      return;
+    }
+
+    setIsSubmittingRecovery(true);
+    try {
+      const buildResponse = await buildWithdrawUnallocatedXdr({
+        admin: wallet.address,
+        token: unallocatedBalance.token,
+        to: recoveryToInput.trim(),
+        amount
+      });
+
+      const signedTxXdr = await signWithFreighter(
+        buildResponse.xdr,
+        buildResponse.metadata.networkPassphrase
+      );
+
+      const server = new rpc.Server(
+        process.env.NEXT_PUBLIC_SOROBAN_RPC_URL ?? "https://soroban-testnet.stellar.org",
+        { allowHttp: true }
+      );
+      const transaction = new Transaction(signedTxXdr, buildResponse.metadata.networkPassphrase);
+      const submitResponse = await server.sendTransaction(transaction);
+
+      if (submitResponse.status === "ERROR") {
+        throw new Error(submitResponse.errorResult?.toString() ?? "Transaction failed.");
+      }
+
+      setLastRecoveryTxHash(submitResponse.hash ?? null);
+      setShowRecoveryConfirm(false);
+      notify.success("Recovery transaction submitted successfully.");
+      // Refresh the unallocated balance display
+      await onInspectUnallocated();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Recovery transaction failed.";
+      notify.error(message);
+    } finally {
+      setIsSubmittingRecovery(false);
+    }
   }
 
   async function onUpdateMetadata() {
@@ -1434,6 +1517,165 @@ export function SplitApp() {
                   ) : (
                     <div className="rounded-2xl border border-dashed border-white/10 bg-white/2 px-5 py-6 text-sm text-muted">
                       No token addresses are allowlisted yet. The contract currently accepts any token address for new splits.
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* Issue #166: Unallocated Token Recovery Console */}
+            {wallet.connected && isContractAdmin && (
+              <div className="glass-card rounded-[2.5rem] p-8 md:p-10 border border-goldLight/10">
+                <div className="space-y-1 mb-8">
+                  <p className="text-[10px] font-bold uppercase tracking-[0.2em] text-goldLight/80">
+                    Admin — Recovery Console
+                  </p>
+                  <h2 className="font-display text-2xl tracking-tight">Unallocated Token Recovery</h2>
+                  <p className="max-w-2xl text-sm text-muted">
+                    Inspect and safely recover tokens that were sent directly to the contract address
+                    outside of any tracked project balance. This action never touches project-accounted funds.
+                  </p>
+                </div>
+
+                {/* Step 1: Inspect */}
+                <div className="space-y-4">
+                  <label className="block">
+                    <span className="text-[10px] font-bold uppercase tracking-[0.2em] text-muted">Token Contract Address</span>
+                    <input
+                      type="text"
+                      value={recoveryTokenInput}
+                      onChange={(e) => setRecoveryTokenInput(e.target.value)}
+                      placeholder="C..."
+                      className="mt-2 w-full rounded-xl border border-white/10 bg-white/5 px-4 py-3 font-mono text-sm text-ink placeholder:text-muted/40 focus:outline-none focus:ring-2 focus:ring-goldLight/30"
+                    />
+                  </label>
+                  <button
+                    type="button"
+                    onClick={onInspectUnallocated}
+                    disabled={isLoadingUnallocated || !recoveryTokenInput.trim()}
+                    className="rounded-xl border border-goldLight/30 bg-goldLight/10 px-6 py-2.5 text-xs font-bold uppercase tracking-widest text-goldLight transition-all hover:bg-goldLight/20 disabled:opacity-40"
+                  >
+                    {isLoadingUnallocated ? "Inspecting…" : "Inspect Unallocated Balance"}
+                  </button>
+
+                  {unallocatedError && (
+                    <p className="rounded-xl border border-red-500/20 bg-red-500/10 px-4 py-3 text-sm text-red-400">
+                      {unallocatedError}
+                    </p>
+                  )}
+
+                  {unallocatedBalance && (
+                    <div className="rounded-2xl border border-goldLight/20 bg-goldLight/5 p-6 space-y-4">
+                      <div className="flex items-start justify-between gap-4">
+                        <div className="space-y-1">
+                          <p className="text-[10px] font-bold uppercase tracking-[0.2em] text-goldLight/80">Recoverable Balance</p>
+                          <p className="font-mono text-2xl font-bold text-goldLight">
+                            {Number(unallocatedBalance.unallocated).toLocaleString()}{" "}
+                            <span className="text-sm font-sans text-muted">Stroops</span>
+                          </p>
+                        </div>
+                        <div className="text-right space-y-1">
+                          <p className="text-[10px] font-bold uppercase tracking-[0.2em] text-muted">Token</p>
+                          <p className="font-mono text-[11px] text-muted break-all max-w-[200px]">{unallocatedBalance.token}</p>
+                        </div>
+                      </div>
+
+                      {/* Step 2: Recovery form */}
+                      {Number(unallocatedBalance.unallocated) > 0 && !showRecoveryConfirm && (
+                        <div className="space-y-3 pt-2 border-t border-white/5">
+                          <label className="block">
+                            <span className="text-[10px] font-bold uppercase tracking-[0.2em] text-muted">Destination Address</span>
+                            <input
+                              type="text"
+                              value={recoveryToInput}
+                              onChange={(e) => setRecoveryToInput(e.target.value)}
+                              placeholder="G... or C..."
+                              className="mt-2 w-full rounded-xl border border-white/10 bg-white/5 px-4 py-3 font-mono text-sm text-ink placeholder:text-muted/40 focus:outline-none focus:ring-2 focus:ring-goldLight/30"
+                            />
+                          </label>
+                          <label className="block">
+                            <span className="text-[10px] font-bold uppercase tracking-[0.2em] text-muted">Amount (Stroops)</span>
+                            <input
+                              type="number"
+                              min={1}
+                              max={Number(unallocatedBalance.unallocated)}
+                              value={recoveryAmountInput}
+                              onChange={(e) => setRecoveryAmountInput(e.target.value)}
+                              className="mt-2 w-full rounded-xl border border-white/10 bg-white/5 px-4 py-3 font-mono text-sm text-ink placeholder:text-muted/40 focus:outline-none focus:ring-2 focus:ring-goldLight/30"
+                            />
+                          </label>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              if (!recoveryToInput.trim() || !recoveryAmountInput || Number(recoveryAmountInput) <= 0) {
+                                notify.error("Fill in destination address and a valid amount.");
+                                return;
+                              }
+                              setShowRecoveryConfirm(true);
+                            }}
+                            className="rounded-xl bg-goldLight/20 px-6 py-2.5 text-xs font-bold uppercase tracking-widest text-goldLight transition-all hover:bg-goldLight/30"
+                          >
+                            Review Recovery
+                          </button>
+                        </div>
+                      )}
+
+                      {/* Step 3: Confirmation dialog */}
+                      {showRecoveryConfirm && (
+                        <div className="space-y-4 rounded-2xl border border-goldLight/30 bg-black/30 p-6 pt-4">
+                          <h3 className="text-xs font-bold uppercase tracking-widest text-goldLight">
+                            Confirm Recovery — Review Before Submitting
+                          </h3>
+                          <dl className="grid grid-cols-2 gap-x-6 gap-y-3 text-sm">
+                            <dt className="text-muted">Token</dt>
+                            <dd className="font-mono text-[11px] break-all">{unallocatedBalance.token}</dd>
+                            <dt className="text-muted">Destination</dt>
+                            <dd className="font-mono text-[11px] break-all">{recoveryToInput}</dd>
+                            <dt className="text-muted">Amount</dt>
+                            <dd className="font-mono font-bold text-goldLight">{Number(recoveryAmountInput).toLocaleString()} Stroops</dd>
+                            <dt className="text-muted">Remaining After</dt>
+                            <dd className="font-mono">
+                              {(Number(unallocatedBalance.unallocated) - Number(recoveryAmountInput)).toLocaleString()} Stroops
+                            </dd>
+                          </dl>
+                          <p className="text-[11px] text-muted/70 italic">
+                            This action only withdraws the unallocated surplus. Project-accounted balances are never touched.
+                          </p>
+                          <div className="flex gap-3">
+                            <button
+                              type="button"
+                              onClick={onConfirmRecovery}
+                              disabled={isSubmittingRecovery}
+                              className="rounded-xl bg-goldLight/30 px-6 py-2.5 text-xs font-bold uppercase tracking-widest text-goldLight transition-all hover:bg-goldLight/40 disabled:opacity-40"
+                            >
+                              {isSubmittingRecovery ? "Submitting…" : "Confirm & Submit"}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setShowRecoveryConfirm(false)}
+                              className="rounded-xl border border-white/10 px-6 py-2.5 text-xs font-bold uppercase tracking-widest text-muted transition-all hover:text-ink"
+                            >
+                              Cancel
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Audit receipt after successful recovery */}
+                  {lastRecoveryTxHash && (
+                    <div className="rounded-2xl border border-greenBright/20 bg-greenBright/5 p-5">
+                      <p className="text-[10px] font-bold uppercase tracking-widest text-greenBright mb-2">Recovery Submitted</p>
+                      <p className="font-mono text-[11px] text-muted break-all">Tx: {lastRecoveryTxHash}</p>
+                      <a
+                        href={`https://stellar.expert/explorer/testnet/tx/${lastRecoveryTxHash}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="mt-2 inline-block text-[10px] font-bold text-greenBright underline underline-offset-4 hover:text-white"
+                      >
+                        View on Explorer →
+                      </a>
                     </div>
                   )}
                 </div>

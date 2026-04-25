@@ -15,7 +15,13 @@ import {
   loadStellarConfig, 
   getStellarRpcServer, 
   RequestValidationError,
-  executeWithRetry
+  executeWithRetry,
+  getCached,
+  setCached,
+  invalidateCache,
+  invalidateCacheByPrefix,
+  getCacheStats,
+  READ_CACHE_TTL_MS
 } from "../services/stellar.js";
 
 export const splitsRouter = Router();
@@ -382,6 +388,12 @@ async function simulateReadOnlyContractCall(
 }
 
 async function listProjects(start: number, limit: number) {
+  const cacheKey = `list_projects:${start}:${limit}`;
+  const cached = getCached<unknown[]>(cacheKey);
+  if (cached !== undefined) {
+    return cached;
+  }
+
   const config = loadStellarConfig();
   const server = getStellarRpcServer();
 
@@ -409,10 +421,18 @@ async function listProjects(start: number, limit: number) {
     return [];
   }
 
-  return scValToNative(retval) as unknown[];
+  const result = scValToNative(retval) as unknown[];
+  setCached(cacheKey, result);
+  return result;
 }
 
 async function fetchProjectById(projectId: string) {
+  const cacheKey = `project:${projectId}`;
+  const cached = getCached<unknown>(cacheKey);
+  if (cached !== undefined) {
+    return cached;
+  }
+
   const config = loadStellarConfig();
   const server = getStellarRpcServer();
 
@@ -439,7 +459,11 @@ async function fetchProjectById(projectId: string) {
   }
 
   const project = scValToNative(retval) as unknown;
-  return project ?? null;
+  const result = project ?? null;
+  if (result !== null) {
+    setCached(cacheKey, result);
+  }
+  return result;
 }
 
 interface LockProjectRequest {
@@ -888,6 +912,9 @@ splitsRouter.post("/:projectId/deposit", async (req, res, next) => {
         from: parsedBody.data.from,
         amount: parsedBody.data.amount
       });
+      // Evict cached project state; balance will change after submission
+      invalidateCache(`project:${parsedParams.data}`);
+      invalidateCacheByPrefix("list_projects:");
       return res.status(200).json(result);
     } catch (error) {
       if (error instanceof RequestValidationError) {
@@ -1002,6 +1029,8 @@ splitsRouter.post("/", async (req, res, next) => {
 
     try {
       const result = await buildCreateProjectUnsignedXdr(parsed.data);
+      // Invalidate list cache so newly created project appears immediately
+      invalidateCacheByPrefix("list_projects:");
       return res.status(200).json(result);
     } catch (error) {
       if (error instanceof RequestValidationError) {
@@ -1072,6 +1101,10 @@ splitsRouter.post("/:projectId/distribute", async (req: Request, res: Response, 
       .build();
 
     const preparedTx = await executeWithRetry(() => server.prepareTransaction(tx));
+
+    // Evict cached project data; distribution round and balance will change
+    invalidateCache(`project:${projectId}`);
+    invalidateCacheByPrefix("list_projects:");
 
     return res.status(200).json({
       xdr: preparedTx.toXDR(),
@@ -1449,7 +1482,7 @@ export const historyQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(200).default(100)
 });
 
-function toEventTopic(value: string) {
+function _toEventTopic(value: string) {
   const scVal = nativeToScVal(value, { type: "symbol" });
   return typeof scVal === "object" && scVal !== null && "toXDR" in scVal
     ? scVal.toXDR("base64")
@@ -1550,4 +1583,253 @@ splitsRouter.get("/:projectId/history", async (req: Request, res: Response, next
   } catch (error) {
     return next(error);
   }
+});
+
+// ============================================================
+// Issue #152: Admin contract-state read routes
+// Expose get_admin, is_token_allowed, get_allowed_token_count,
+// and is_distributions_paused as cohesive read endpoints.
+// ============================================================
+
+/**
+ * GET /splits/admin/status
+ * Returns the current admin address and whether distributions are paused.
+ */
+splitsRouter.get("/admin/status", async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const requestId = res.locals.requestId;
+    try {
+      const [adminRetval, pausedRetval] = await Promise.all([
+        simulateReadOnlyContractCall("get_admin"),
+        simulateReadOnlyContractCall("is_distributions_paused")
+      ]);
+
+      const admin = adminRetval ? String(scValToNative(adminRetval)) : null;
+      const isPaused = pausedRetval ? Boolean(scValToNative(pausedRetval)) : false;
+
+      return res.status(200).json({ admin, isPaused });
+    } catch (error) {
+      if (error instanceof RequestValidationError) {
+        return res.status(400).json({ error: "validation_error", message: error.message, requestId });
+      }
+      throw error;
+    }
+  } catch (error) {
+    return next(error);
+  }
+});
+
+const isTokenAllowedQuerySchema = z.object({
+  token: stellarAddressSchema.describe("token contract address to check")
+});
+
+/**
+ * GET /splits/admin/is-token-allowed?token=<address>
+ * Returns whether the given token is on the contract allowlist.
+ */
+splitsRouter.get("/admin/is-token-allowed", async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const requestId = res.locals.requestId;
+    const parsed = isTokenAllowedQuerySchema.safeParse(req.query);
+    if (!parsed.success) {
+      return res.status(400).json({
+        error: "validation_error",
+        message: "Invalid query parameters.",
+        details: parsed.error.flatten(),
+        requestId
+      });
+    }
+    const { token } = parsed.data;
+
+    try {
+      const retval = await simulateReadOnlyContractCall("is_token_allowed", [
+        Address.fromString(token).toScVal()
+      ]);
+      const isAllowed = retval ? Boolean(scValToNative(retval)) : false;
+      return res.status(200).json({ token, isAllowed });
+    } catch (error) {
+      if (error instanceof RequestValidationError) {
+        return res.status(400).json({ error: "validation_error", message: error.message, requestId });
+      }
+      throw error;
+    }
+  } catch (error) {
+    return next(error);
+  }
+});
+
+/**
+ * GET /splits/admin/token-count
+ * Returns the current number of allowlisted tokens.
+ */
+splitsRouter.get("/admin/token-count", async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const requestId = res.locals.requestId;
+    try {
+      const retval = await simulateReadOnlyContractCall("get_allowed_token_count");
+      const count = retval ? Number(scValToNative(retval)) : 0;
+      return res.status(200).json({ count });
+    } catch (error) {
+      if (error instanceof RequestValidationError) {
+        return res.status(400).json({ error: "validation_error", message: error.message, requestId });
+      }
+      throw error;
+    }
+  } catch (error) {
+    return next(error);
+  }
+});
+
+// ============================================================
+// Issue #166: Unallocated token recovery routes
+// Inspect and recover tokens that landed in the contract address
+// outside of any tracked project balance.
+// ============================================================
+
+const unallocatedQuerySchema = z.object({
+  token: stellarAddressSchema.describe("token contract address")
+});
+
+/**
+ * GET /splits/admin/unallocated?token=<address>
+ * Returns the unallocated (recoverable) balance for a token in the contract.
+ */
+splitsRouter.get("/admin/unallocated", async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const requestId = res.locals.requestId;
+    const parsed = unallocatedQuerySchema.safeParse(req.query);
+    if (!parsed.success) {
+      return res.status(400).json({
+        error: "validation_error",
+        message: "Invalid query parameters.",
+        details: parsed.error.flatten(),
+        requestId
+      });
+    }
+    const { token } = parsed.data;
+
+    try {
+      const retval = await simulateReadOnlyContractCall("get_unallocated_balance", [
+        Address.fromString(token).toScVal()
+      ]);
+      const unallocated = retval ? String(scValToNative(retval)) : "0";
+      return res.status(200).json({ token, unallocated });
+    } catch (error) {
+      if (error instanceof RequestValidationError) {
+        return res.status(400).json({ error: "validation_error", message: error.message, requestId });
+      }
+      throw error;
+    }
+  } catch (error) {
+    return next(error);
+  }
+});
+
+export const withdrawUnallocatedSchema = z.object({
+  admin: stellarAddressSchema.describe("admin"),
+  token: stellarAddressSchema.describe("token contract address"),
+  to: stellarAddressSchema.describe("destination address"),
+  amount: z
+    .number()
+    .positive("amount must be greater than 0")
+    .describe("amount in stroops to recover")
+});
+
+type WithdrawUnallocatedRequest = z.infer<typeof withdrawUnallocatedSchema>;
+
+async function buildWithdrawUnallocatedUnsignedXdr(input: WithdrawUnallocatedRequest) {
+  const config = loadStellarConfig();
+  const server = getStellarRpcServer();
+
+  let sourceAccount;
+  try {
+    sourceAccount = await executeWithRetry(() => server.getAccount(input.admin));
+  } catch {
+    throw new RequestValidationError("admin account not found on selected network");
+  }
+
+  const adminAddress = Address.fromString(input.admin);
+  const tokenAddress = Address.fromString(input.token);
+  const toAddress = Address.fromString(input.to);
+
+  const contract = new Contract(config.contractId);
+  const tx = new TransactionBuilder(sourceAccount, {
+    fee: BASE_FEE,
+    networkPassphrase: config.networkPassphrase
+  })
+    .addOperation(
+      contract.call(
+        "withdraw_unallocated",
+        adminAddress.toScVal(),
+        tokenAddress.toScVal(),
+        toAddress.toScVal(),
+        nativeToScVal(input.amount, { type: "i128" })
+      )
+    )
+    .setTimeout(300)
+    .build();
+
+  const preparedTx = await executeWithRetry(() => server.prepareTransaction(tx));
+  return {
+    xdr: preparedTx.toXDR(),
+    metadata: {
+      contractId: config.contractId,
+      networkPassphrase: config.networkPassphrase,
+      sourceAccount: input.admin,
+      sequenceNumber: preparedTx.sequence,
+      fee: preparedTx.fee,
+      operation: "withdraw_unallocated",
+      // Audit context included so operators can later understand what was recovered
+      auditContext: {
+        token: input.token,
+        destination: input.to,
+        amount: input.amount,
+        initiatedAt: new Date().toISOString()
+      }
+    }
+  };
+}
+
+/**
+ * POST /splits/admin/withdraw-unallocated
+ * Builds an unsigned XDR transaction to recover unallocated tokens.
+ * The response includes audit context (token, destination, amount, timestamp).
+ */
+splitsRouter.post("/admin/withdraw-unallocated", async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const requestId = res.locals.requestId;
+    const parsed = withdrawUnallocatedSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({
+        error: "validation_error",
+        message: "Invalid request payload.",
+        details: parsed.error.flatten(),
+        requestId
+      });
+    }
+
+    try {
+      const result = await buildWithdrawUnallocatedUnsignedXdr(parsed.data);
+      return res.status(200).json(result);
+    } catch (error) {
+      if (error instanceof RequestValidationError) {
+        return res.status(400).json({ error: "validation_error", message: error.message, requestId });
+      }
+      throw error;
+    }
+  } catch (error) {
+    return next(error);
+  }
+});
+
+// ============================================================
+// Cache diagnostics (non-sensitive internal endpoint)
+// ============================================================
+
+/**
+ * GET /splits/admin/cache-stats
+ * Returns current in-memory cache occupancy for operational visibility.
+ */
+splitsRouter.get("/admin/cache-stats", (_req: Request, res: Response) => {
+  res.status(200).json({ ...getCacheStats(), ttlMs: READ_CACHE_TTL_MS });
 });

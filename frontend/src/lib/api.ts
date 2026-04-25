@@ -236,3 +236,85 @@ export async function getTokenAllowlist(
     "Failed to fetch token allowlist"
   );
 }
+
+// ============================================================
+// Issue #152: Admin contract-state read helpers
+// ============================================================
+
+export interface AdminStatusState {
+  admin: string | null;
+  isPaused: boolean;
+}
+
+export async function getAdminStatus(): Promise<AdminStatusState> {
+  return requestJson<AdminStatusState>(
+    "/splits/admin/status",
+    "Failed to fetch admin status"
+  );
+}
+
+export async function isTokenAllowed(token: string): Promise<{ token: string; isAllowed: boolean }> {
+  return requestJson<{ token: string; isAllowed: boolean }>(
+    `/splits/admin/is-token-allowed?token=${encodeURIComponent(token)}`,
+    "Failed to check token allowlist status"
+  );
+}
+
+export async function getAdminTokenCount(): Promise<{ count: number }> {
+  return requestJson<{ count: number }>(
+    "/splits/admin/token-count",
+    "Failed to fetch allowed token count"
+  );
+}
+
+// ============================================================
+// Issue #166: Unallocated token recovery helpers
+// ============================================================
+
+export interface UnallocatedBalanceState {
+  token: string;
+  unallocated: string;
+}
+
+export async function getUnallocatedBalance(token: string): Promise<UnallocatedBalanceState> {
+  return requestJson<UnallocatedBalanceState>(
+    `/splits/admin/unallocated?token=${encodeURIComponent(token)}`,
+    "Failed to fetch unallocated balance"
+  );
+}
+
+export interface WithdrawUnallocatedPayload {
+  admin: string;
+  token: string;
+  to: string;
+  amount: number;
+}
+
+export interface WithdrawUnallocatedResponse {
+  xdr: string;
+  metadata: {
+    networkPassphrase: string;
+    contractId: string;
+    operation: string;
+    auditContext: {
+      token: string;
+      destination: string;
+      amount: number;
+      initiatedAt: string;
+    };
+  };
+}
+
+export async function buildWithdrawUnallocatedXdr(
+  payload: WithdrawUnallocatedPayload
+): Promise<WithdrawUnallocatedResponse> {
+  return requestJson<WithdrawUnallocatedResponse>(
+    "/splits/admin/withdraw-unallocated",
+    "Failed to build withdraw unallocated transaction",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    }
+  );
+}

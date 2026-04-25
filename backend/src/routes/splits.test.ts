@@ -674,3 +674,153 @@ describe("Issue #174: lock & update permissions and owner gating", () => {
     expect(ownerCalls.length).toBe(3);
   });
 });
+
+// ============================================================
+// Issue #152: Admin contract-state read routes
+// ============================================================
+
+describe("admin contract-state read routes", () => {
+  it("GET /splits/admin/status returns admin address and pause status", async () => {
+    simulateTransactionMock.mockResolvedValue({
+      result: { retval: "GADMIN" }
+    });
+    getAccountMock.mockResolvedValue({ accountId: "GTESTSIMULATOR" });
+
+    const app = createApp();
+    const res = await request(app).get("/splits/admin/status").expect(200);
+
+    expect(res.body).toHaveProperty("admin");
+    expect(res.body).toHaveProperty("isPaused");
+  });
+
+  it("GET /splits/admin/is-token-allowed returns allowlist status for a valid token", async () => {
+    simulateTransactionMock.mockResolvedValue({
+      result: { retval: true }
+    });
+    getAccountMock.mockResolvedValue({ accountId: "GTESTSIMULATOR" });
+
+    const app = createApp();
+    const token = "CTOKEN00000000000000000000000000000000000000000000000001";
+    const res = await request(app)
+      .get(`/splits/admin/is-token-allowed?token=${token}`)
+      .expect(200);
+
+    expect(res.body).toMatchObject({ token });
+    expect(res.body).toHaveProperty("isAllowed");
+  });
+
+  it("GET /splits/admin/is-token-allowed returns 400 for a missing token param", async () => {
+    const app = createApp();
+    const res = await request(app).get("/splits/admin/is-token-allowed").expect(400);
+    expect(res.body.error).toBe("validation_error");
+  });
+
+  it("GET /splits/admin/token-count returns allowed token count", async () => {
+    simulateTransactionMock.mockResolvedValue({
+      result: { retval: 3 }
+    });
+    getAccountMock.mockResolvedValue({ accountId: "GTESTSIMULATOR" });
+
+    const app = createApp();
+    const res = await request(app).get("/splits/admin/token-count").expect(200);
+
+    expect(res.body).toHaveProperty("count");
+  });
+});
+
+// ============================================================
+// Issue #166: Unallocated token recovery routes
+// ============================================================
+
+describe("unallocated token recovery routes", () => {
+  const VALID_ADMIN = "GADMIN00000000000000000000000000000000000000000000000001";
+  const VALID_TOKEN = "CTOKEN00000000000000000000000000000000000000000000000001";
+  const VALID_TO = "GRECOVER0000000000000000000000000000000000000000000000001";
+
+  it("GET /splits/admin/unallocated returns recoverable balance for a valid token", async () => {
+    simulateTransactionMock.mockResolvedValue({
+      result: { retval: 500_000 }
+    });
+    getAccountMock.mockResolvedValue({ accountId: "GTESTSIMULATOR" });
+
+    const app = createApp();
+    const res = await request(app)
+      .get(`/splits/admin/unallocated?token=${VALID_TOKEN}`)
+      .expect(200);
+
+    expect(res.body).toMatchObject({ token: VALID_TOKEN });
+    expect(res.body).toHaveProperty("unallocated");
+  });
+
+  it("GET /splits/admin/unallocated returns 400 when token is missing", async () => {
+    const app = createApp();
+    const res = await request(app).get("/splits/admin/unallocated").expect(400);
+    expect(res.body.error).toBe("validation_error");
+  });
+
+  it("POST /splits/admin/withdraw-unallocated builds unsigned XDR with audit context", async () => {
+    getAccountMock.mockResolvedValue({ accountId: VALID_ADMIN });
+    prepareTransactionMock.mockResolvedValue({
+      toXDR: () => "XDR_WITHDRAW_UNALLOCATED",
+      sequence: "999",
+      fee: "100"
+    });
+
+    const app = createApp();
+    const res = await request(app)
+      .post("/splits/admin/withdraw-unallocated")
+      .send({
+        admin: VALID_ADMIN,
+        token: VALID_TOKEN,
+        to: VALID_TO,
+        amount: 250_000
+      })
+      .expect(200);
+
+    expect(res.body.xdr).toBe("XDR_WITHDRAW_UNALLOCATED");
+    expect(res.body.metadata.operation).toBe("withdraw_unallocated");
+    expect(res.body.metadata.auditContext).toMatchObject({
+      token: VALID_TOKEN,
+      destination: VALID_TO,
+      amount: 250_000
+    });
+    expect(res.body.metadata.auditContext.initiatedAt).toBeDefined();
+    expect(getAccountMock).toHaveBeenCalledWith(VALID_ADMIN);
+  });
+
+  it("POST /splits/admin/withdraw-unallocated returns 400 when amount is missing", async () => {
+    const app = createApp();
+    const res = await request(app)
+      .post("/splits/admin/withdraw-unallocated")
+      .send({ admin: VALID_ADMIN, token: VALID_TOKEN, to: VALID_TO })
+      .expect(400);
+
+    expect(res.body.error).toBe("validation_error");
+  });
+
+  it("POST /splits/admin/withdraw-unallocated returns 400 when amount is zero or negative", async () => {
+    const app = createApp();
+    const res = await request(app)
+      .post("/splits/admin/withdraw-unallocated")
+      .send({ admin: VALID_ADMIN, token: VALID_TOKEN, to: VALID_TO, amount: -1 })
+      .expect(400);
+
+    expect(res.body.error).toBe("validation_error");
+  });
+});
+
+// ============================================================
+// Issue #161: Read-result caching — cache-stats endpoint
+// ============================================================
+
+describe("cache stats endpoint", () => {
+  it("GET /splits/admin/cache-stats returns cache size and ttl", async () => {
+    const app = createApp();
+    const res = await request(app).get("/splits/admin/cache-stats").expect(200);
+
+    expect(res.body).toHaveProperty("size");
+    expect(res.body).toHaveProperty("ttlMs");
+    expect(res.body).toHaveProperty("keys");
+    expect(Array.isArray(res.body.keys)).toBe(true);
+  });
+});
